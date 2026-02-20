@@ -9,6 +9,7 @@
 https://cs.lr.tudelft.nl
 
 This project provides an interactive JavaScript/HTML application that demonstrates reinforcement learning for two-dimensional aircraft conflict detection and resolution (CD&R).
+The goal was to explore various options (i.e., action shielding, human feedback and expert demonstrations) to speed up learning and to make the agent demonstrate more operationally accepted behavior. 
 
 The application simulates a **150 × 100 NM airspace sector** containing an ownship and an intruder aircraft. Random encounter geometries are generated to create potential conflicts. 
 A reinforcement learning agent (linear Q-learning with function approximation) learns to:
