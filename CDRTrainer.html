@@ -1,0 +1,2927 @@
+<!DOCTYPE html>
+<html lang="en">
+  <!-- Clark Borst, December - January 2026 -->
+<head>
+  <meta charset="UTF-8" />
+  <title>2D Aircraft Conflict – Q-Learning + Shielding Toggle</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      font-size: 14px;
+      background: #f5f5f5;
+      margin: 0;
+      padding: 1rem;
+    }
+    #container {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+    }
+    #left {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      flex: 0 0 auto;
+    }
+
+    /* RIGHT SIDE: main column (plot+log) + controls column */
+    #right {
+      display: flex;
+      flex-direction: row;   /* side-by-side columns */
+      gap: 0.5rem;
+      width: auto;
+      align-items: flex-start;
+    }
+    #rightMain {
+      display: flex;
+      flex-direction: column; /* reward plot over log */
+      gap: 0.5rem;
+      width: 420px;
+    }
+
+    /* main canvas */
+    canvas {
+      border: 2px solid #999;
+      background: #ffffff;
+      width: 600px;
+      height: 400px;
+      flex-shrink: 0;
+      display: block;
+    }
+
+    #rewardPlot, #safetyPlot {
+      border: 1px solid #999;
+      background: #ffffff;
+      width: 420px;
+      height: 120px;
+      display: block;
+    }
+
+    #featurePlot {
+      border: 2px solid #999;
+      background: #ffffff;
+      width: 420px;
+      height: 140px;
+      display: block;
+    }
+
+    #controls {
+      border: 2px solid #999;
+      width: 180px;
+      background: #fff;
+      padding: 0.5rem;
+      font-size: 0.85rem;
+      height: fit-content;
+    }
+    #controls input {
+      margin-left: 0.4rem;
+      margin-bottom: 0.35rem;
+    }
+
+    button {
+      padding: 8px 12px;
+      margin: 4px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #c9e0e9;
+      cursor: pointer;
+    }
+    button:hover { background: #6e939b; }
+
+    #pref, #rating { margin-top: 0.5rem; }
+
+    #log {
+      font-size: 12px;
+      font-family: monospace;
+      background: #fff;
+      padding: 0.5rem;
+      border: 2px solid #999;
+      height: 150px;          /* fixed height */
+      overflow-y: auto;       /* scroll when full */
+      white-space: pre-wrap;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      background: #eee;
+      margin-right: 0.3rem;
+      font-size: 0.75rem;
+    }
+    select {
+      margin-left: 0.4rem;
+      margin-bottom: 0.7rem;
+    }
+    label { font-size: 0.85rem; }
+  </style>
+</head>
+
+<body>
+  <h2>Safe Reinforcement Learning with Human Feedback and
+    Expert Demonstrations for 2D Aircraft Conflict Resolution</h2>
+
+  <p>
+    Clark Borst, 2026, Delft University of Technology<br><br>
+    Documentation and source code: <a href="https://github.com/clarkborst">https://github.com/clarkborst</a>
+  </p>
+  <hr>
+  <div>
+    Mode:
+    <select id="modeSelect">
+      <option value="pairwise">Pairwise preference (A vs B)</option>
+      <option value="rating">Single-episode rating (1–5)</option>
+      <option value="auto">Automatic RL (Q-learning)</option>
+      <option value="heur_vo_rule">Rule (Velocity Obstacle, pass-behind)</option>
+    </select>
+  </div>
+
+  <div id="container">
+    <div id="left">
+      <canvas id="sim" width="600" height="400"></canvas>
+      <div>
+        <button id="runBtn">Run (A vs B)</button>
+        <button id="speedBtn" style="display:none;">Go fast</button>
+        <button id="testBtn">Test greedy policy</button>
+        <button id="debugBtn">Debug: OFF</button>
+      </div>
+      <div>
+        <span class="badge" id="comparisonInfo">Comparisons: 0</span>
+        <span class="badge" id="ratingInfo">Episodes rated: 0 (avg: n/a)</span>
+        <span class="badge" id="avgRewardInfo">Avg R(50): n/a</span>
+        <span class="badge" id="statusBadge">Status: idle</span>
+      </div>
+
+      <div id="pref" style="display:none;">
+        <div>Which solution is better?</div>
+        <button data-choice="A">A better</button>
+        <button data-choice="B">B better</button>
+        <button data-choice="same">About same / unclear</button>
+      </div>
+
+      <div id="rating" style="display:none;">
+        <div>Rate this solution (1 = unacceptable, 5 = excellent):</div>
+        <button data-r="1">1</button>
+        <button data-r="2">2</button>
+        <button data-r="3">3</button>
+        <button data-r="4">4</button>
+        <button data-r="5">5</button>
+      </div>
+    </div>
+
+    <div id="right">
+      <div id="rightMain">
+        <canvas id="safetyPlot" width="400" height="120"></canvas>
+        <canvas id="rewardPlot" width="400" height="120"></canvas>
+        <canvas id="featurePlot" width="400" height="140"></canvas>
+        <div id="log"></div>
+      </div>
+
+      <!-- Controls column to the RIGHT of both reward plot and log -->
+      <div id="controls">
+        <div style="font-weight:600; margin-bottom:6px;">Settings</div>
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <label style="display:block; margin-bottom:6px;">
+            <input type="checkbox" id="shieldCheckbox" checked>
+            Shielding enabled
+        </label>
+
+        <label style="display:block; margin-bottom:6px;">
+            <input type="checkbox" id="speedControlCheckbox">
+            Speed control
+        </label>
+
+        <label style="display:block; margin-bottom:6px;">
+            <input type="checkbox" id="demoCheckbox">
+            Expert demos (train RL)
+        </label>
+
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <label style="display:block; margin-bottom:6px;">
+            <input type="checkbox" id="trajCheckbox" checked>
+            Show trajectories
+        </label>
+
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <label>
+          Learning rate (α):
+          <input id="alphaInput" type="number" min="0" max="0.5" step="0.001" value="0.02" style="width:90px;">
+        </label>
+        <br>
+
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <label>
+         CPA horizon (s):
+          <input id="horizonInput" type="number" min="30" max="1800" step="10" value="300" style="width:90px;">
+        </label>
+        <br>
+
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <label>
+          Human feedback gain:
+          <input id="feedbackGainInput" type="number" min="0" max="10" step="0.1" value="1.0" style="width:90px;">
+        </label>
+        <br>
+
+        <label>
+          Demonstration gain:
+          <input id="demoGainInput" type="number" min="0" max="5" step="0.1" value="1.0" style="width:90px;">
+        </label>
+        <br>
+
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <div style="margin-top:6px; font-size:0.85rem;">
+          Conflict angle range (deg):
+        </div>
+        <label style="display:inline-block; width:205px;">
+          Min:
+          <input id="caMinInput" type="number" min="0" max="179" step="1" value="50" style="margin-left:10px;width:70px;">
+        </label>
+        <label style="display:inline-block; width:205px;">
+          Max:
+          <input id="caMaxInput" type="number" min="1" max="179" step="1" value="170" style="width:70px;">
+        </label>
+
+        <div style="margin-top:6px; font-size:12px; color:#555;">
+          (Changes apply immediately to new episodes.)
+        </div>
+
+        <hr style="border:none; border-top:1px solid #ddd; margin:6px 0;">
+
+        <div style="display:flex; gap:0px; flex-wrap:wrap;">
+            <button id="saveBtn" type="button">Save agent</button>
+            <button id="loadBtn" type="button">Load agent</button>
+            <input id="loadFileInput" type="file" accept="application/json" style="display:none;">
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /****************************************************
+     * Global action set: multiples of 10° up to ±50°
+     ****************************************************/
+    // Heading deltas (deg)
+    const ACTION_DEGS = [-50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50];
+
+    // Speed deltas (kts) for optional speed control
+    const SPEED_DELTAS = [-10, 0, 10];
+
+    // Combined action space: (deltaHeadingDeg, deltaSpeedKts)
+    const ACTIONS = [];
+    for (let si = 0; si < SPEED_DELTAS.length; si++) {
+      for (let hi = 0; hi < ACTION_DEGS.length; hi++) {
+        ACTIONS.push({ dH: ACTION_DEGS[hi], dV: SPEED_DELTAS[si] });
+      }
+    }
+
+    // Index for (0 deg, 0 kt)
+    const ZERO_ACTION_INDEX = ACTIONS.findIndex(a => a.dH === 0 && a.dV === 0);
+
+    function randInt(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    /****************************************************
+     * 2D Conflict Environment in Nautical Miles and Knots
+     ****************************************************/
+    class ConflictEnv {
+      constructor(maxManeuvers = 4, cpaHorizonSec = 600) {
+        // Canvas size in pixels
+        this.width = 600;
+        this.height = 400;
+
+        // World size in NM
+        this.worldWidthNM = 150;
+        this.worldHeightNM = 100;
+        this.pxPerNM = this.width / this.worldWidthNM;
+
+        this.sepMinNM = 5;      // LoS threshold (NM)
+        this.maxSteps = 200;    // episode length (steps)
+        this.dtSec = 10;        // seconds per simulator step
+
+        this.maxManeuvers = maxManeuvers;
+        this.cpaHorizonSec = cpaHorizonSec; // tCPA horizon in seconds
+
+        this.ownSpeedMinKts = 350;
+        this.ownSpeedMaxKts = 500;
+
+        this.exit = {xNM: 145, yNM: 50, radiusNM: 3};
+        this.reset();
+      }
+
+      normalizeHeadingRad(h) {
+        while (h > Math.PI) h -= 2 * Math.PI;
+        while (h < -Math.PI) h += 2 * Math.PI;
+        return h;
+      }
+
+      createRelativeAircraft(posCon, hdgConRad, Vcon_kts, CA_deg, CPA_nm, PZ_nm, Vobs_kts, TTL_s) {
+        const hdgObsRad = this.normalizeHeadingRad(hdgConRad - (CA_deg * Math.PI / 180));
+
+        const Vcon = {vx: Vcon_kts * Math.cos(hdgConRad), vy: Vcon_kts * Math.sin(hdgConRad)};
+        const Vint = {vx: Vobs_kts * Math.cos(hdgObsRad), vy: Vobs_kts * Math.sin(hdgObsRad)};
+
+        const Vrel = {vx: Vcon.vx - Vint.vx, vy: Vcon.vy - Vint.vy};
+        const relSpeed = Math.hypot(Vrel.vx, Vrel.vy);
+
+        let d_rel_nm;
+        if (Math.abs(CPA_nm) < PZ_nm) {
+          d_rel_nm = (TTL_s / 3600.0) * relSpeed + Math.sqrt(PZ_nm * PZ_nm - CPA_nm * CPA_nm);
+        } else {
+          d_rel_nm = (TTL_s / 3600.0) * relSpeed;
+        }
+
+        const Vrel_unit = {vx: Vrel.vx / relSpeed, vy: Vrel.vy / relSpeed};
+
+        const pos_x_rel_nm = d_rel_nm * Vrel_unit.vx - CPA_nm * Vrel_unit.vy;
+        const pos_y_rel_nm = CPA_nm * Vrel_unit.vx + d_rel_nm * Vrel_unit.vy;
+
+        return {
+          xNM: posCon.xNM + pos_x_rel_nm,
+          yNM: posCon.yNM + pos_y_rel_nm,
+          headingRad: hdgObsRad
+        };
+      }
+
+      // useTest = true -> fixed test geometry
+      reset(useTest = false, scenario = null) {
+
+        this.lastAppliedAction = ZERO_ACTION_INDEX;
+        this.maneuverEvents = 0;
+        this.holdStepsRemaining = 0;
+
+        // Ownship: left side, heading east
+        this.own = {
+          xNM: 5,
+          yNM: 50,
+          speedKts: 420 + (Math.random() - 0.5) * 40,
+          heading: 0
+        };
+
+        // If a scenario is provided, override randomized initial conditions
+        if (scenario && scenario.own && scenario.intruder) {
+          this.own = {
+            xNM: scenario.own.xNM,
+            yNM: scenario.own.yNM,
+            speedKts: scenario.own.speedKts,
+            heading: scenario.own.heading
+          };
+        }
+
+        let startXNM, startYNM, heading, Vobs_kts;
+
+        if (useTest) {
+          heading = Math.PI;
+          Vobs_kts = 450.0;
+          startXNM = 150.0;
+          startYNM = 50.0;
+        } else if (scenario && scenario.own && scenario.intruder) { // for pairwise mode
+          // reuse the exact same geometry
+          startXNM = scenario.intruder.xNM;
+          startYNM = scenario.intruder.yNM;
+          heading = scenario.intruder.heading;
+          Vobs_kts = scenario.intruder.speedKts;
+        } else {
+          const posCon = {xNM: this.own.xNM, yNM: this.own.yNM};
+          const hdgConRad = this.own.heading;
+          const Vcon_kts = this.own.speedKts;
+
+          const PZ_nm = this.sepMinNM;
+
+          // NEW: conflict angle range from UI globals caMinDeg/caMaxDeg
+          const minAngle = Math.max(0, Math.min(179, caMinDeg));
+          const maxAngle = Math.max(minAngle + 1, Math.min(179, caMaxDeg));
+          const absCA = minAngle + Math.random() * (maxAngle - minAngle);
+          const sign = Math.random() < 0.5 ? 1 : -1;
+          const CA_deg = sign * absCA;
+
+          const CPA_nm = -4 + Math.random() * 4; // only make conflicts!
+          const TTL_s = 240 + Math.random() * 340;
+          Vobs_kts = 420 + (Math.random() - 0.5) * 40;
+
+          const rel = this.createRelativeAircraft(
+                  posCon,
+                  hdgConRad,
+                  Vcon_kts,
+                  CA_deg,
+                  CPA_nm,
+                  PZ_nm,
+                  Vobs_kts,
+                  TTL_s
+          );
+
+          startXNM = rel.xNM;
+          startYNM = rel.yNM;
+          heading = rel.headingRad;
+        }
+
+        this.intruder = {
+          xNM: startXNM,
+          yNM: startYNM,
+          speedKts: Vobs_kts,
+          heading: heading
+        };
+
+        // Keep a copy of the initial geometry used (for pairwise reuse)
+        this.currentScenario = {
+          own: {
+            xNM: this.own.xNM,
+            yNM: this.own.yNM,
+            speedKts: this.own.speedKts,
+            heading: this.own.heading
+          },
+          intruder: {
+            xNM: this.intruder.xNM,
+            yNM: this.intruder.yNM,
+            speedKts: this.intruder.speedKts,
+            heading: this.intruder.heading
+          }
+        };
+
+        this.stepCount = 0;
+        this.maneuverCount = 0;
+
+        const initState = this.getState();
+        this.initialDistExit = initState.distExit;
+        this.initialHeading = this.own.heading;
+        this.initialSpeedKts = this.own.speedKts;  // remember initial speed
+        this.trackMilesFlown = 0;
+
+        if (initState.dist < this.sepMinNM + 1) {
+          const extra = (this.sepMinNM + 2 - initState.dist);
+          this.intruder.xNM += Math.cos(this.intruder.heading) * extra * 0.5;
+          this.intruder.yNM += Math.sin(this.intruder.heading) * extra * 0.5;
+        }
+
+        // update scenario if intruder was shifted by the safety-start adjustment
+        this.currentScenario.intruder.xNM = this.intruder.xNM;
+        this.currentScenario.intruder.yNM = this.intruder.yNM;
+
+        return this.getState();
+      }
+
+      velocity(ac) {
+        const speedNMS = ac.speedKts / 3600;
+        return {vx: speedNMS * Math.cos(ac.heading), vy: speedNMS * Math.sin(ac.heading)};
+      }
+
+      predictConflict(dx, dy, dvx, dvy) {
+        const v2 = dvx * dvx + dvy * dvy;
+        let tCPA = 0;
+        if (v2 > 1e-9) {
+          const rv = dx * dvx + dy * dvy;
+          tCPA = -rv / v2;
+        } else {
+          tCPA = 0;
+        }
+
+        if (tCPA < 0) tCPA = 0;
+        if (tCPA > this.cpaHorizonSec) tCPA = this.cpaHorizonSec;
+
+        const rx = dx + dvx * tCPA;
+        const ry = dy + dvy * tCPA;
+        const dCPA = Math.hypot(rx, ry);
+
+        const predictedConflict =
+                tCPA >= 0 && tCPA <= this.cpaHorizonSec && dCPA < this.sepMinNM;
+
+        return {predictedConflict, tCPA, dCPA};
+      }
+
+      getState() {
+        const dx = this.intruder.xNM - this.own.xNM;
+        const dy = this.intruder.yNM - this.own.yNM;
+
+        const ownV = this.velocity(this.own);
+        const intV = this.velocity(this.intruder);
+
+        const dvx = intV.vx - ownV.vx;
+        const dvy = intV.vy - ownV.vy;
+        const dist = Math.hypot(dx, dy);
+
+        const wx = this.exit.xNM - this.own.xNM;
+        const wy = this.exit.yNM - this.own.yNM;
+        const distExit = Math.hypot(wx, wy);
+
+        const {predictedConflict, tCPA, dCPA} = this.predictConflict(dx, dy, dvx, dvy);
+        const tCPANorm = this.cpaHorizonSec > 0 ? tCPA / this.cpaHorizonSec : 0;
+
+        // compute cross-track deviation
+        // -----------------------------
+        const h0 = (Number.isFinite(this.initialHeading) ? this.initialHeading : 0);
+        const ux0 = Math.cos(h0);
+        const uy0 = Math.sin(h0);
+
+        const x = Number.isFinite(this.own.xNM) ? this.own.xNM : 0;
+        const y = Number.isFinite(this.own.yNM) ? this.own.yNM : 0;
+        const x0 = Number.isFinite(this.currentScenario.own.xNM) ? this.currentScenario.own.xNM : x;
+        const y0 = Number.isFinite(this.currentScenario.own.yNM) ? this.currentScenario.own.yNM : y;
+
+        // displacement from initial track anchor
+        const rx = x - x0;
+        const ry = y - y0;
+
+        // along-track and cross-track coordinates in NM
+        const alongTrack = rx * ux0 + ry * uy0;
+        const crossTrack = -rx * uy0 + ry * ux0; // signed
+
+        return {
+          dx, dy, dvx, dvy,
+          dist,
+          wx, wy,
+          distExit,
+          predictedConflict,
+          tCPA,
+          tCPANorm,
+          dCPA,
+          ownHeading: this.own.heading,
+          initialHeading: this.initialHeading,
+          crossTrack,
+          alongTrack
+        };
+      }
+
+      applyAction(actionIndex) {
+        const a = ACTIONS[actionIndex];
+
+        // Heading change
+        const deltaRad = (a.dH * Math.PI) / 180;
+        this.own.heading += deltaRad;
+
+        // wrap heading to [-π, π]
+        if (this.own.heading > Math.PI) this.own.heading -= 2 * Math.PI;
+        if (this.own.heading < -Math.PI) this.own.heading += 2 * Math.PI;
+
+        // Speed change (optional)
+        if (speedControlEnabled && a.dV !== 0) {
+          this.own.speedKts += a.dV;
+          // clamp to reasonable bounds
+          if (this.own.speedKts < this.ownSpeedMinKts) this.own.speedKts = this.ownSpeedMinKts;
+          if (this.own.speedKts > this.ownSpeedMaxKts) this.own.speedKts = this.ownSpeedMaxKts;
+        }
+      }
+
+      step(requestedAction) {
+        // -----------------------------
+        // Pre-step bookkeeping
+        // -----------------------------
+        const currentState = this.getState();
+        const predictedConflict = currentState.predictedConflict;
+        const prevDCPA = currentState.dCPA;
+
+        // Heading error BEFORE applying action (for progress shaping later)
+        const desiredPrev = this.initialHeading;
+        let diffPrev = desiredPrev - this.own.heading;
+        while (diffPrev > Math.PI) diffPrev -= 2 * Math.PI;
+        while (diffPrev < -Math.PI) diffPrev += 2 * Math.PI;
+        const headingErrorPrev = Math.abs(diffPrev) / Math.PI; // [0,1]
+
+        // Cross/along BEFORE step (for progress shaping)
+        const h0_prev = this.initialHeading ?? 0;
+        const ux0_prev = Math.cos(h0_prev), uy0_prev = Math.sin(h0_prev);
+        const x_prev = this.own.xNM, y_prev = this.own.yNM;
+        const x0_prev = (this.currentScenario?.own?.xNM ?? 5);
+        const y0_prev = (this.currentScenario?.own?.yNM ?? 50);
+        const rx_prev = x_prev - x0_prev;
+        const ry_prev = y_prev - y0_prev;
+        const crossPrev = -rx_prev * uy0_prev + ry_prev * ux0_prev; // signed (NM)
+        const crossAbsPrev = Math.abs(crossPrev);
+
+        // Along-to-exit BEFORE step (remaining along original track)
+        const wx_prev = this.exit.xNM - x_prev;
+        const wy_prev = this.exit.yNM - y_prev;
+        const alongRemainPrev = wx_prev * ux0_prev + wy_prev * uy0_prev; // NM (can be negative)
+
+        let appliedAction = requestedAction;
+        const lastA = this.lastAppliedAction ?? ZERO_ACTION_INDEX;
+
+        const isNonZero = (idx) =>
+                ACTIONS[idx].dH !== 0 || (speedControlEnabled && ACTIONS[idx].dV !== 0);
+
+        // -----------------------------
+        // Maneuver budget as EVENTS (action changes)
+        // -----------------------------
+        let actionChanged;
+
+        // Gate: first non-zero only allowed when predicted conflict exists
+        if (this.maneuverCount === 0 && !predictedConflict && isNonZero(appliedAction)) {
+          appliedAction = ZERO_ACTION_INDEX;
+        }
+
+        // actionChanged after gating
+        actionChanged = (appliedAction !== lastA);
+
+        // Block only if we'd TAKE a new maneuver event while at/over budget
+        if (this.maneuverCount >= this.maxManeuvers && (actionChanged && isNonZero(appliedAction))) {
+          appliedAction = ZERO_ACTION_INDEX;
+        }
+
+        // Final actionChanged after possible blocking
+        actionChanged = (appliedAction !== lastA);
+
+        // Count maneuvers as EVENTS (command changes into a non-zero command)
+        const tookManeuverEvent = actionChanged && isNonZero(appliedAction);
+        if (tookManeuverEvent) {
+          this.maneuverCount++;
+        }
+
+        this.lastAppliedAction = appliedAction;
+
+        // -----------------------------
+        // Apply action & propagate dynamics
+        // -----------------------------
+        this.applyAction(appliedAction);
+
+        const ownV = this.velocity(this.own);
+        const intV = this.velocity(this.intruder);
+
+        const stepDistNM = Math.hypot(ownV.vx, ownV.vy) * this.dtSec;
+        this.trackMilesFlown += stepDistNM;
+
+        this.own.xNM += ownV.vx * this.dtSec;
+        this.own.yNM += ownV.vy * this.dtSec;
+        this.intruder.xNM += intV.vx * this.dtSec;
+        this.intruder.yNM += intV.vy * this.dtSec;
+
+        this.stepCount++;
+
+        // -----------------------------
+        // Post-step state + termination flags
+        // -----------------------------
+        const state = this.getState();
+        const conflict = state.dist < this.sepMinNM;
+
+        const outOfBoundsTerminate =
+                this.own.xNM < 0 || this.own.xNM > this.worldWidthNM ||
+                this.own.yNM < 0 || this.own.yNM > this.worldHeightNM;
+
+        const outOfBoundsPenalty =
+                this.own.xNM < 0 ||
+                this.own.yNM < 0 || this.own.yNM > this.worldHeightNM;
+
+        const reachedExit = state.distExit < this.exit.radiusNM;
+        const exitGoodSide = this.own.xNM > this.worldWidthNM;
+
+        // NOTE: reachedExit is NOT a termination by itself in your current design
+        const doneBase =
+                this.stepCount >= this.maxSteps ||
+                conflict ||
+                outOfBoundsTerminate;
+
+        const nearConflict = currentState.predictedConflict || state.predictedConflict;
+
+        // -----------------------------
+        // Heading error AFTER applying action
+        // -----------------------------
+        const desiredHeading = this.initialHeading;
+        let diff = desiredHeading - this.own.heading;
+        while (diff > Math.PI) diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        const headingError = Math.abs(diff) / Math.PI; // [0,1]
+
+        // Restored heading condition
+        const RESTORE_TOL_DEG = 8;
+        const restoredHeading = (headingError * Math.PI) <= (RESTORE_TOL_DEG * Math.PI / 180);
+
+        // Task complete: resolved + restored + exit right
+        const taskComplete = (!nearConflict && exitGoodSide);
+
+        const doneFinal = doneBase || taskComplete;
+
+        // -----------------------------
+        // Reward shaping (RESCALED)
+        // Goals:
+        //  - Avoid conflict
+        //  - Resolve quickly
+        //  - Restore to original heading ASAP
+        //  - Minimize cross-track when safe and especially at exit
+        //  - Prefer 2 maneuver EVENTS: 1 avoid + 1 restore
+        //  - Remove incentive to "exit early anywhere" to dodge step costs
+        // -----------------------------
+        let reward = 0;
+
+        // ---- A) Always-on small living cost (keeps returns bounded) ----
+        const LIVING_COST = 0.02; // total ~ -4 over 200 steps
+        reward -= LIVING_COST;
+
+        // ---- B) Terminal penalties (moderate, not huge) ----
+        if (conflict) reward -= 30;
+        if (outOfBoundsTerminate) reward -= 18;
+
+        // Small per-step discouragement for skating on forbidden boundaries
+        if (outOfBoundsPenalty) reward -= 0.6;
+
+        // ---- C) Dense "conflict persistence" penalty (prevents stalling/circling) ----
+        if (nearConflict) {
+          const CONFLICT_STEP_PEN = 0.45; // total ~ -9 if you linger 20 steps
+          reward -= CONFLICT_STEP_PEN;
+        }
+
+        // ---- D) dCPA shaping (bounded, only when closing) ----
+        const closing = (state.dx * state.dvx + state.dy * state.dvy) < 0;
+        if (nearConflict && closing) {
+          const deltaD = state.dCPA - prevDCPA;             // + good
+          const deltaClipped = Math.max(-0.5, Math.min(0.5, deltaD)); // NM/step
+          const DCPA_DELTA_GAIN = 1.6;                      // bounded
+          reward += DCPA_DELTA_GAIN * (deltaClipped / this.sepMinNM);
+
+          // small hinge towards a safe margin (stabilizer only)
+          const TARGET = 1.2 * this.sepMinNM;
+          const gap = state.dCPA - TARGET;
+          const gapClipped = Math.max(-this.sepMinNM, Math.min(this.sepMinNM, gap));
+          const DCPA_HINGE_GAIN = 0.25;
+          reward += DCPA_HINGE_GAIN * (gapClipped / this.sepMinNM);
+        }
+
+        // ---- E) Cross-track + restore shaping (ONLY when safe) ----
+        const h0 = this.initialHeading ?? 0;
+        const ux0 = Math.cos(h0), uy0 = Math.sin(h0);
+        const x = this.own.xNM, y = this.own.yNM;
+        const x0 = (this.currentScenario?.own?.xNM ?? 5);
+        const y0 = (this.currentScenario?.own?.yNM ?? 50);
+
+        const rx = x - x0;
+        const ry = y - y0;
+        const cross = -rx * uy0 + ry * ux0;     // NM signed
+        const crossAbs = Math.abs(cross);
+
+        // Along remaining to exit along the ORIGINAL track
+        const wx = this.exit.xNM - x;
+        const wy = this.exit.yNM - y;
+        const alongRemain = wx * ux0 + wy * uy0; // NM (can be negative)
+
+        if (!nearConflict) {
+          const deltaAlong = alongRemainPrev - alongRemain;          // + good
+          const deltaAlongClip = Math.max(-0.5, Math.min(0.5, deltaAlong));
+
+          // Smoothly encourage progress to the right, increasingly once heading is restored
+          const RESTORE_SOFT = 0.25; // ~45 deg
+          const restoreFactor = Math.max(0.0, 1.0 - (headingError / RESTORE_SOFT)); // 0..1
+
+          const ALONG_PROGRESS_GAIN = 0.9; // try 0.7–1.2
+          reward += ALONG_PROGRESS_GAIN * restoreFactor * (deltaAlongClip / 2.0);
+
+          // Penalize moving backwards along-track (kills "go left and wait")
+          const BACKTRACK_PEN = 0.8; // try 0.4–1.2
+          if (deltaAlong < 0) {
+            reward -= BACKTRACK_PEN * ((-deltaAlongClip) / 2.0);
+          }
+        }
+
+        // ---- F) Maneuver event cost: prefer exactly 2 events (avoid + restore) ----
+        if (tookManeuverEvent) {
+          const over = Math.max(0, this.maneuverCount - 2);
+
+          // allow decisive avoid in conflict, discourage extra "tweaks"
+          const BASE_EVENT_COST = nearConflict ? 0.12 : 0.22;
+
+          // linear is enough; quadratic can make agent refuse to restore
+          const OVER_EVENT_COST = 0.35 * over; // tune 0.20–0.60
+
+          // discount conflict maneuvers if they improve dCPA; make harmful ones costly
+          let helpFactor = 1.0;
+          if (nearConflict && closing) {
+            const deltaD = state.dCPA - prevDCPA;
+            helpFactor = (deltaD >= 0) ? 0.65 : 1.8;
+          }
+
+          // make safe maneuvers expensive (so it stops steering after restore)
+          if (!nearConflict) helpFactor *= 1.25;
+
+          reward -= helpFactor * (BASE_EVENT_COST + OVER_EVENT_COST);
+        }
+
+        // ---- G) Dithering penalty (action changes) ----
+        // keep bounded; too high can force "commit to wrong avoid heading forever"
+        if (actionChanged) {
+          const ACTION_CHANGE_PEN = nearConflict ? 0.12 : 0.22;
+          reward -= ACTION_CHANGE_PEN;
+        }
+
+        // ---- H) Turning penalty: OK during conflict, discouraged after ----
+        const headingChangeDeg = Math.abs(ACTIONS[appliedAction].dH);
+        if (headingChangeDeg > 0) {
+          const TURN_RATE_PEN = 0.07;            // small, bounded
+          const turnRateScale = nearConflict ? 0.35 : 1.0;
+          reward -= turnRateScale * TURN_RATE_PEN * (headingChangeDeg / 10.0);
+        }
+
+        // ---- I) Strongly discourage "safe but keep turning" ----
+        // This is different from maneuver-event count: it penalizes any nonzero command when safe.
+        // Keep this SMALL, so it doesn't prevent the single restore maneuver.
+        if (!nearConflict && isNonZero(appliedAction)) {
+          const SAFE_NONZERO_PEN = 0.10; // was 0.25 (too strong -> can lock in avoid heading)
+          reward -= SAFE_NONZERO_PEN;
+        }
+
+        // ---- J) Timeout penalty (bounded) ----
+        const timedOut = (this.stepCount >= this.maxSteps);
+        if (doneFinal && timedOut && !taskComplete && !conflict && !outOfBoundsTerminate) {
+          reward -= 20;
+        }
+
+        // ---- K) Success bonus + exit cross-track penalty (at termination) ----
+        if (taskComplete) {
+          reward += 20.0;
+
+          if(restoredHeading) reward += 15.0;
+
+          // penalize exiting off-track (bounded)
+          const XT_EXIT_CLIP = 80.0;
+          const xtExit01 = Math.min(crossAbs, XT_EXIT_CLIP) / XT_EXIT_CLIP; // [0,1]
+          const EXIT_XT_PEN_GAIN = 10.0; // up to -10 at terrible exit
+          reward -= EXIT_XT_PEN_GAIN * xtExit01;
+        }
+
+        // ---- L) Anti-exploit: early termination should not "save" future costs ----
+        // If you terminate NOT via success or conflict, charge remaining living cost anyway.
+        if (doneFinal && !taskComplete && !conflict) {
+          reward -= 12;// * (this.maxSteps - this.stepCount);
+        }
+
+        // Make out-of-bounds termination (wrong-side exit) unambiguously worse than staying to finish.
+        if (doneFinal && outOfBoundsTerminate) {
+          // additionally punish leaving before completing route along-track
+          const REMAIN_SCALE = 120.0; // NM; tune to your typical remaining distance
+          const remain01 = Math.max(0, Math.min(1, alongRemain / REMAIN_SCALE));
+          reward -= 10.0 * remain01; // up to -10 if very early exit
+        }
+
+        // Note: currently SPEED maneuvers are not penalized
+
+        // -----------------------------
+        // Return
+        // -----------------------------
+        return {
+          state,
+          done: doneFinal,
+          taskComplete,
+          conflict,
+          outOfBounds: outOfBoundsTerminate,
+          outOfBoundsTerminate,
+          outOfBoundsPenalty,
+          reachedExit,
+          appliedAction,
+          reward
+        };
+      }
+    }
+
+    /****************************************************
+     * Q-Learning Agent with Linear Function Approx.
+     ****************************************************/
+    class QLearningAgent {
+      constructor(numFeatures, numActions, alpha = 0.02, gamma = 0.99) {
+        this.numFeatures = numFeatures;
+        this.numActions = numActions;
+        this.alpha = alpha;
+        this.gamma = gamma;
+
+        this.epsilon = 0.40;
+        this.epsilonMin = 0.015;
+        this.epsilonDecay = 0.995;
+        this.episodeCount = 0;
+
+        this.weights = [];
+        this.recentStates = [];
+        for (let a = 0; a < numActions; a++) {
+          const w = new Array(numFeatures).fill(0).map(() => (Math.random() - 0.5) * 0.05);
+          this.weights.push(w);
+        }
+      }
+
+      featurize(state) {
+        const {
+          dx, dy, dvx, dvy, dist,
+          dCPA, tCPANorm, predictedConflict,
+          wx, wy, crossTrack, alongTrack, initialHeading
+        } = state;
+
+        // -----------------------------
+        // 1) Smooth range (intruder distance), centered
+        // -----------------------------
+        const D_SCALE = 30.0; // NM
+        const d01 = 1.0 - Math.exp(-Math.max(0, dist) / D_SCALE);  // [0,1)
+        const dCentered = d01 - 0.5;                               // ~[-0.5,+0.5]
+
+        // -----------------------------
+        // 2) Closing rate along LOS (already useful), in [-1,1]
+        // -----------------------------
+        const dVecMag = dist > 1e-6 ? dist : 1e-6;
+        const ex = dx / dVecMag;
+        const ey = dy / dVecMag;
+        const vRelRadial = dvx * ex + dvy * ey;
+
+        const V_MAX = (900 / 3600); // NM/s
+        const dDotNorm = Math.max(-V_MAX, Math.min(V_MAX, vRelRadial)) / V_MAX; // [-1,1]
+
+        // -----------------------------
+        // 3–4) Intruder relative bearing wrt current heading
+        // -----------------------------
+        const ownHeading = state.ownHeading ?? 0;
+        const thetaIntr = Math.atan2(dy, dx);
+        let thetaRel = thetaIntr - ownHeading;
+        while (thetaRel > Math.PI) thetaRel -= 2 * Math.PI;
+        while (thetaRel < -Math.PI) thetaRel += 2 * Math.PI;
+
+        const sinThetaRel = Math.sin(thetaRel);
+        const cosThetaRel = Math.cos(thetaRel);
+
+        // -----------------------------
+        // 5) dCPA “margin” feature (avoid/resolve), in [-1,1]
+        //    Use sepMin from state if you add it; otherwise fallback 5.
+        // -----------------------------
+        const sep = state.sepMinNM ?? 5.0;
+        const marginRatio = (dCPA - sep) / sep;   // 0 at sepMin
+        const dCPAMargin = Math.tanh(marginRatio / 1.0); // [-1,1]
+
+        // -----------------------------
+        // 6) Urgency based on tCPA (only when conflict predicted)
+        // -----------------------------
+        const urgency = (predictedConflict && tCPANorm < 1.0)
+                ? (1.0 - Math.max(0, Math.min(1, tCPANorm)))   // [0,1]
+                : 0.0;
+        const urgencyCentered = urgency - 0.0; // keep as [0,1] gated
+
+        // -----------------------------
+        // 7) Cross-track magnitude penalty feature (higher is better when near 0)
+        // -----------------------------
+        const XT_SCALE = 8.0; // NM: tune 5–12
+        const crossAbs = Math.abs(crossTrack);
+        const cross01 = 1.0 - Math.exp(-crossAbs / XT_SCALE); // 0 near track → 1 far away
+        const crossCentered = 0.5 - cross01;                  // + when near track, - when far
+
+        // -----------------------------
+        // 8) Along-track remaining-to-exit (encourage exiting without “sniping”)
+        //     Uses projection of vector to exit onto original track direction.
+        // -----------------------------
+        const AL_SCALE = 40.0; // NM: tune 30–60
+        const alongRemain01 = 1.0 - Math.exp(-Math.max(0, alongTrack) / AL_SCALE);
+        const alongRemainCentered = 0.5 - alongRemain01; // bigger when closer along-track
+
+        // -----------------------------
+        // 9–10) Heading error to original heading (sin/cos keeps it smooth)
+        // -----------------------------
+        let dH = ownHeading - initialHeading;
+        while (dH > Math.PI) dH -= 2 * Math.PI;
+        while (dH < -Math.PI) dH += 2 * Math.PI;
+        const sinHErr = Math.sin(dH);
+        const cosHErr = Math.cos(dH);
+
+        return [
+          dCentered,            // 0) intruder distance (smooth, centered)
+          dDotNorm,             // 1) closing rate along LOS
+          sinThetaRel,          // 2) intruder bearing
+          cosThetaRel,          // 3) intruder bearing
+          dCPAMargin,           // 4) CPA margin vs sep
+          urgencyCentered,      // 5) tCPA urgency (gated)
+          crossCentered,        // 6) cross-track deviation (higher when near 0)
+          alongRemainCentered,  // 7) along-track remaining to exit (higher when closer)
+          sinHErr,              // 8) heading error to original (smooth)
+          cosHErr,              // 9) heading error to original (smooth)
+          1.0                   // 10) bias
+        ];
+      }
+
+      qValues(phi) {
+        const qs = new Array(this.numActions).fill(0);
+        for (let a = 0; a < this.numActions; a++) {
+          let q = 0;
+          const w = this.weights[a];
+          for (let i = 0; i < this.numFeatures; i++) q += w[i] * phi[i];
+          qs[a] = q;
+        }
+        return qs;
+      }
+
+      update(phi, action, reward, nextState, done) {
+        const qs = this.qValues(phi);
+        const qsa = qs[action];
+
+        let target;
+        if (done) {
+          target = reward;
+        } else {
+          const nextPhi = this.featurize(nextState);
+          const nextQs = this.qValues(nextPhi);
+          let maxNext = nextQs[0];
+          for (let a = 1; a < this.numActions; a++) {
+            if (nextQs[a] > maxNext) maxNext = nextQs[a];
+          }
+          target = reward + this.gamma * maxNext;
+        }
+
+        const tdError = target - qsa;
+        const w = this.weights[action];
+
+        const L2_ALL = 0.0005;     // small
+        const L2_BIAS = 0.005;     // stronger
+
+        // L2 regularization
+        for (let i = 0; i < this.numFeatures; i++) {
+          const l2 = (i === this.numFeatures - 1) ? L2_BIAS : L2_ALL;
+          w[i] = (1.0 - this.alpha * l2) * w[i] + this.alpha * tdError * phi[i];
+        }
+      }
+
+      endEpisode() {
+        this.episodeCount++;
+        if (this.epsilon > this.epsilonMin) {
+          this.epsilon *= this.epsilonDecay;
+          if (this.epsilon < this.epsilonMin) this.epsilon = this.epsilonMin;
+        }
+      }
+
+      updateFromRating(trajectory, ratingSignal) {
+        if (!trajectory || trajectory.length === 0 || ratingSignal === 0) return;
+        const alphaH = this.alpha;
+        for (const step of trajectory) {
+          const { phi, action } = step;
+          const qsa = this.qValues(phi)[action];
+          const delta = ratingSignal - qsa;
+          const w = this.weights[action];
+          for (let i = 0; i < this.numFeatures; i++) w[i] += alphaH * delta * phi[i];
+        }
+      }
+
+      updateFromPreference(trajPreferred, trajOther, strength = 1.0) {
+        if (trajPreferred) this.updateFromRating(trajPreferred, +1.0 * strength);
+        if (trajOther)     this.updateFromRating(trajOther, -1.0 * strength);
+      }
+
+      // Supervised imitation step: encourage expert action to outrank others by a margin.
+      imitateStep(phi, expertAction, gain = 0.5, margin = 0.2) {
+        if (expertAction == null) return;
+
+        const qs = this.qValues(phi);
+
+        // best competing action (highest Q among non-expert)
+        let aNeg = 0;
+        let qNeg = -Infinity;
+        for (let a = 0; a < qs.length; a++) {
+          if (a === expertAction) continue;
+          if (qs[a] > qNeg) {
+            qNeg = qs[a];
+            aNeg = a;
+          }
+        }
+
+        const qPos = qs[expertAction];
+        if (qPos >= qNeg + margin) return; // already satisfies margin
+
+        const step = this.alpha * gain;
+        for (let i = 0; i < this.numFeatures; i++) {
+          this.weights[expertAction][i] += step * phi[i];
+          this.weights[aNeg][i]        -= step * phi[i];
+        }
+      }
+
+      // Pairwise imitation: enforce Q(s,aPos) >= Q(s,aNeg) + margin
+      imitatePair(phi, aPos, aNeg, gain = 0.8, margin = 0.2) {
+        if (aPos == null || aNeg == null) return;
+        if (aPos === aNeg) return;
+
+        const qs = this.qValues(phi);
+        if (qs[aPos] >= qs[aNeg] + margin) return;
+
+        const step = this.alpha * gain;
+        for (let i = 0; i < this.numFeatures; i++) {
+          this.weights[aPos][i] += step * phi[i];
+          this.weights[aNeg][i] -= step * phi[i];
+        }
+      }
+    }
+
+    /****************************************************
+     * Action Shielding Helpers (CPA-based)
+     ****************************************************/
+    function computeHeadingErrorToExit(env, heading) {
+      const wx = env.exit.xNM - env.own.xNM;
+      const wy = env.exit.yNM - env.own.yNM;
+      const desired = Math.atan2(wy, wx);
+      let diff = desired - heading;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      return Math.abs(diff);
+    }
+
+    function computeHeadingErrorToOriginal(env, headingRad) {
+      const ref = env.initialHeading ?? 0;
+      let diff = ref - headingRad;
+      while (diff > Math.PI) diff -= 2 * Math.PI;
+      while (diff < -Math.PI) diff += 2 * Math.PI;
+      return Math.abs(diff);
+    }
+
+    // currently not used
+    function computeSpeedErrorToOriginal(env, speedKts) {
+        const ref = env.initialSpeedKts ?? env.own.speedKts;
+        return Math.abs(speedKts - ref); // kts
+    }
+
+    function getSafeActions(env, state) {
+      const safe = [];
+      const predictedNow = state.predictedConflict;
+      const currentHeading = env.own.heading;
+
+      const dx = state.dx;
+      const dy = state.dy;
+
+      const ownV = env.velocity(env.own);
+      const intV = env.velocity(env.intruder);
+
+      const dvx = intV.vx - ownV.vx;
+      const dvy = intV.vy - ownV.vy;
+
+      const { dCPA: dCPA_current } = env.predictConflict(dx, dy, dvx, dvy);
+
+      let currentErrorStyle = 0;
+      if (ENABLE_HEADING_STYLE_SHIELD) {
+        if (STYLE_SHIELD_MODE === "original") {
+          currentErrorStyle = computeHeadingErrorToOriginal(env, currentHeading);
+        } else if (STYLE_SHIELD_MODE === "exit") {
+          currentErrorStyle = computeHeadingErrorToExit(env, currentHeading);
+        } else {
+          currentErrorStyle = 0;
+        }
+      }
+
+      const margin = (HEADING_STYLE_TOL_DEG * Math.PI) / 180;
+
+      for (let idx = 0; idx < ACTIONS.length; idx++) {
+
+        const a = ACTIONS[idx];
+
+        // If speed control disabled, only allow dV = 0 actions
+        if (!speedControlEnabled && a.dV !== 0) continue;
+
+        const deltaRad = (a.dH * Math.PI) / 180;
+
+        let newHeading = currentHeading + deltaRad;
+
+        if (newHeading > Math.PI) newHeading -= 2 * Math.PI;
+        if (newHeading < -Math.PI) newHeading += 2 * Math.PI;
+
+        if (ENABLE_HEADING_STYLE_SHIELD && !predictedNow) {
+          let newErrorStyle;
+          if (STYLE_SHIELD_MODE === "original") {
+            newErrorStyle = computeHeadingErrorToOriginal(env, newHeading);
+          } else if (STYLE_SHIELD_MODE === "exit") {
+            newErrorStyle = computeHeadingErrorToExit(env, newHeading);
+          } else {
+            newErrorStyle = currentErrorStyle;
+          }
+          if (newErrorStyle > currentErrorStyle + margin) continue;
+        }
+
+        const newSpeedKts = speedControlEnabled ? (env.own.speedKts + a.dV) : env.own.speedKts;
+        const clampedSpeedKts = Math.max(env.ownSpeedMinKts ?? 350, Math.min(env.ownSpeedMaxKts ?? 500, newSpeedKts));
+        const speedNMS = clampedSpeedKts / 3600;
+
+        const ownVxNew = speedNMS * Math.cos(newHeading);
+        const ownVyNew = speedNMS * Math.sin(newHeading);
+
+        const ownNx = env.own.xNM + ownVxNew * env.dtSec;
+        const ownNy = env.own.yNM + ownVyNew * env.dtSec;
+        const intNx = env.intruder.xNM + intV.vx * env.dtSec;
+        const intNy = env.intruder.yNM + intV.vy * env.dtSec;
+
+        const dxNext = intNx - ownNx;
+        const dyNext = intNy - ownNy;
+        const distNext = Math.hypot(dxNext, dyNext);
+
+        if (distNext < env.sepMinNM) continue;
+
+        const dvxNext = intV.vx - ownVxNew;
+        const dvyNext = intV.vy - ownVyNew;
+
+        const { predictedConflict: predNext, dCPA: dCPA_next } =
+          env.predictConflict(dxNext, dyNext, dvxNext, dvyNext);
+
+        const eps = 1e-3;
+        if (dCPA_next + eps < dCPA_current) continue;
+
+        if (!predictedNow && predNext) continue;
+
+        safe.push(idx);
+      }
+
+      if (safe.length === 0) return [ZERO_ACTION_INDEX];
+      return safe;
+    }
+
+
+    /****************************************************
+    * Heuristic policies (baseline)
+    *  - CPA-margin
+    *  - Velocity Obstacle (VO)
+    ****************************************************/
+
+    function predictOneStepForAction(env, state, actionIdx) {
+        const a = ACTIONS[actionIdx];
+
+        // New heading
+        let newHeading = env.own.heading + (a.dH * Math.PI) / 180;
+        if (newHeading > Math.PI) newHeading -= 2 * Math.PI;
+        if (newHeading < -Math.PI) newHeading += 2 * Math.PI;
+
+        // New speed (optional)
+        let newSpeedKts = env.own.speedKts;
+        if (speedControlEnabled) {
+            newSpeedKts = env.own.speedKts + a.dV;
+            const vmin = env.ownSpeedMinKts ?? 350;
+            const vmax = env.ownSpeedMaxKts ?? 500;
+            if (newSpeedKts < vmin) newSpeedKts = vmin;
+            if (newSpeedKts > vmax) newSpeedKts = vmax;
+        }
+
+        const speedNMS = newSpeedKts / 3600.0;
+
+        // Next positions after one dt
+        const ownVxNew = speedNMS * Math.cos(newHeading);
+        const ownVyNew = speedNMS * Math.sin(newHeading);
+
+        const intV = env.velocity(env.intruder);
+
+        const ownNx = env.own.xNM + ownVxNew * env.dtSec;
+        const ownNy = env.own.yNM + ownVyNew * env.dtSec;
+        const intNx = env.intruder.xNM + intV.vx * env.dtSec;
+        const intNy = env.intruder.yNM + intV.vy * env.dtSec;
+
+        const dxNext = intNx - ownNx;
+        const dyNext = intNy - ownNy;
+        const distNext = Math.hypot(dxNext, dyNext);
+
+        const dvxNext = intV.vx - ownVxNew;
+        const dvyNext = intV.vy - ownVyNew;
+
+        const cpa = env.predictConflict(dxNext, dyNext, dvxNext, dvyNext);
+
+        // unit vector of ownship velocity after action (for ahead/behind logic)
+        const ownVmag = Math.hypot(ownVxNew, ownVyNew);
+        const ownUx = ownVmag > 1e-9 ? (ownVxNew / ownVmag) : Math.cos(newHeading);
+        const ownUy = ownVmag > 1e-9 ? (ownVyNew / ownVmag) : Math.sin(newHeading);
+
+        // relative position at CPA after applying action
+        const rxCPA = dxNext + dvxNext * cpa.tCPA;
+        const ryCPA = dyNext + dvyNext * cpa.tCPA;
+
+        // intruder "ahead" at CPA if projection onto ownship velocity direction is positive
+        const intruderAheadAtCPA = (rxCPA * ownUx + ryCPA * ownUy) > 0;
+
+        return {
+            newHeading,
+            newSpeedKts,
+            dxNext,
+            dyNext,
+            distNext,
+            dvxNext,
+            dvyNext,
+            predictedConflictNext: cpa.predictedConflict,
+            dCPA_next: cpa.dCPA,
+            tCPA_next: cpa.tCPA,
+            ownUx, ownUy,
+            rxCPA, ryCPA,
+            intruderAheadAtCPA
+        };
+    }
+
+    /****************************************************
+     * Rule-based ATC-style heuristic:
+     * 1) Resolve by smallest action that ensures pass-behind with CPA margin
+     * 2) Restore initial heading ASAP once intruder has passed with margin
+     ****************************************************/
+
+    function intruderBehindNow(env, state) {
+        // Use ORIGINAL route direction (initial heading), not current heading
+        const refH = env.initialHeading ?? env.own.heading;
+        const ux = Math.cos(refH);
+        const uy = Math.sin(refH);
+
+        // Intruder behind if projection of relative position onto original track is negative
+        return (state.dx * ux + state.dy * uy) < 0;
+    }
+
+    function selectRuleBasedVOPassBehind(env, state, shieldingEnabled) {
+      const candidates = shieldingEnabled ? getSafeActions(env, state)
+                                          : [...Array(ACTIONS.length).keys()].filter(i => speedControlEnabled || ACTIONS[i].dV === 0);
+
+      const margin = RULE_MARGIN; // e.g. 1.2
+
+      // ---- Phase 2: restore initial heading ASAP once intruder has passed with margin ----
+      if (
+        intruderBehindNow(env, state) &&
+        !state.predictedConflict &&
+        state.dist >= env.sepMinNM * margin
+      ) {
+        let best = ZERO_ACTION_INDEX;
+        let bestKey = [1e18, 1e18, 1e18]; // [newHeadingError, |dH|, |dV|]
+
+        for (const idx of candidates) {
+          const a = ACTIONS[idx];
+          if (!speedControlEnabled && a.dV !== 0) continue;
+
+          const p = predictOneStepForAction(env, state, idx);
+          if (p.distNext < env.sepMinNM) continue;
+          if (p.predictedConflictNext) continue;
+          if (p.dCPA_next < env.sepMinNM * margin) continue;
+
+          const newHErr = computeHeadingErrorToOriginal(env, p.newHeading);
+          const key = [newHErr, Math.abs(a.dH), Math.abs(a.dV)];
+
+          if (
+            key[0] < bestKey[0] ||
+            (key[0] === bestKey[0] && (key[1] < bestKey[1] ||
+            (key[1] === bestKey[1] && key[2] < bestKey[2])))
+          ) {
+            bestKey = key;
+            best = idx;
+          }
+        }
+
+        return { action: best, phi: agent.featurize(state) };
+      }
+
+      // ---- Phase 1: resolve conflict by smallest action that exits VO and ensures pass-behind with margin ----
+      if (state.predictedConflict) {
+        let best = null;
+        let bestKey = [1e18, 1e18]; // [|dH|, |dV|]
+
+        for (const idx of candidates) {
+          const a = ACTIONS[idx];
+          if (!speedControlEnabled && a.dV !== 0) continue;
+
+          const p = predictOneStepForAction(env, state, idx);
+          if (p.distNext < env.sepMinNM) continue;
+          if (p.predictedConflictNext) continue;
+          if (p.dCPA_next < env.sepMinNM * margin) continue;
+
+          // pass-behind: intruder ahead at CPA
+          if (!p.intruderAheadAtCPA) continue;
+
+          // VO "outside cone" check (simplified)
+          const rx = state.dx, ry = state.dy;
+          const r = Math.hypot(rx, ry);
+          const R = env.sepMinNM;
+          const alpha = (r > R) ? Math.asin(Math.min(1.0, R / r)) : (Math.PI / 2);
+
+          const vrel = Math.hypot(p.dvxNext, p.dvyNext);
+          let insideVO = false;
+          if (r > 1e-6 && vrel > 1e-9) {
+            const dot = p.dvxNext * rx + p.dvyNext * ry;
+            const cosb = Math.max(-1, Math.min(1, dot / (vrel * r)));
+            const beta = Math.acos(cosb);
+            const closing = dot < 0;
+            insideVO = closing && (beta < alpha);
+          }
+          if (insideVO) continue;
+
+          const key = [Math.abs(a.dH), Math.abs(a.dV)];
+          if (key[0] < bestKey[0] || (key[0] === bestKey[0] && key[1] < bestKey[1])) {
+            bestKey = key;
+            best = idx;
+          }
+        }
+
+        // fallback if none found: do nothing (or pick safest action)
+        if (best === null) best = ZERO_ACTION_INDEX;
+
+        return { action: best, phi: agent.featurize(state) };
+      }
+
+      // no conflict: minimal control
+      return { action: ZERO_ACTION_INDEX, phi: agent.featurize(state) };
+    }
+
+    function greedyActionFromQ(qs, allowedIdxs) {
+      let best = allowedIdxs[0];
+      let bestQ = qs[best];
+      for (let i = 1; i < allowedIdxs.length; i++) {
+        const a = allowedIdxs[i];
+        if (qs[a] > bestQ) { bestQ = qs[a]; best = a; }
+      }
+      return best;
+    }
+
+    function selectAction(env, agent, state, epsilon, greedyOnly = false, shieldingEnabled = true, avoidAction = null) {
+        const phi = agent.featurize(state);
+        const speedAllowed = speedControlEnabled;
+
+        if (!shieldingEnabled) {
+            const qs = agent.qValues(phi);
+
+            // candidate actions = all actions, optionally excluding avoidAction
+            let candidates = [...Array(ACTIONS.length).keys()];
+            if (!speedAllowed) candidates = candidates.filter(a => ACTIONS[a].dV === 0);
+            if (avoidAction !== null && candidates.length > 1) {
+              candidates = candidates.filter(a => a !== avoidAction);
+            }
+
+            let chosen;
+            if (!greedyOnly && Math.random() < epsilon) {
+                chosen = candidates[randInt(0, candidates.length - 1)];
+            } else {
+                chosen = candidates[0];
+                let bestQ = qs[chosen];
+                for (let i = 1; i < candidates.length; i++) {
+                    const a = candidates[i];
+                    if (qs[a] > bestQ) {
+                        bestQ = qs[a];
+                        chosen = a;
+                    }
+                }
+            }
+        return { action: chosen, phi };
+        }
+
+        const qs = agent.qValues(phi);
+        let safeActions = getSafeActions(env, state);
+
+        // optionally exclude avoidAction if there is another safe option
+        if (avoidAction !== null && safeActions.length > 1) {
+            const filtered = safeActions.filter(a => a !== avoidAction);
+            if (filtered.length > 0) safeActions = filtered;
+        }
+
+        let chosen;
+        if (!greedyOnly && Math.random() < epsilon) {
+            chosen = safeActions[randInt(0, safeActions.length - 1)];
+        } else {
+            chosen = safeActions[0];
+            let bestQ = qs[chosen];
+            for (let i = 1; i < safeActions.length; i++) {
+              const a = safeActions[i];
+              if (qs[a] > bestQ) {
+                bestQ = qs[a];
+                chosen = a;
+              }
+            }
+        }
+        return { action: chosen, phi };
+    }
+
+    function computeFeatureStats(agent) {
+      const states = agent.recentStates || [];
+      const F = agent.numFeatures;
+
+      const rms = new Array(F).fill(0);
+      const mean = new Array(F).fill(0);
+
+      if (states.length === 0) {
+        return { rms, mean };
+      }
+
+      for (const state of states) {
+        const phi = agent.featurize(state);
+
+        // greedy action
+        const qs = agent.qValues(phi);
+        let aStar = 0;
+        for (let a = 1; a < qs.length; a++) {
+          if (qs[a] > qs[aStar]) aStar = a;
+        }
+
+        const w = agent.weights[aStar];
+
+        for (let i = 0; i < F; i++) {
+          const c = w[i] * phi[i];   // contribution
+          mean[i] += c;
+          rms[i] += c * c;
+        }
+      }
+
+      const N = states.length;
+      for (let i = 0; i < F; i++) {
+        mean[i] /= N;
+        rms[i] = Math.sqrt(rms[i] / N);
+      }
+
+      return { rms, mean };
+    }
+
+    /****************************************************
+     * Visualization & Control
+     ****************************************************/
+    const canvas = document.getElementById("sim");
+    const ctx = canvas.getContext("2d");
+
+    const rewardPlotCanvas = document.getElementById("rewardPlot");
+    const rewardPlotCtx = rewardPlotCanvas.getContext("2d");
+
+    const runBtn = document.getElementById("runBtn");
+    const speedBtn = document.getElementById("speedBtn");
+    const testBtn = document.getElementById("testBtn");
+    const debugBtn = document.getElementById("debugBtn");
+    const shieldCheckbox = document.getElementById("shieldCheckbox");
+    const prefDiv = document.getElementById("pref");
+    const ratingDiv = document.getElementById("rating");
+    const logDiv = document.getElementById("log");
+    const comparisonInfo = document.getElementById("comparisonInfo");
+    const ratingInfo = document.getElementById("ratingInfo");
+    const avgRewardInfo = document.getElementById("avgRewardInfo");
+    const statusBadge = document.getElementById("statusBadge");
+    const modeSelect = document.getElementById("modeSelect");
+
+    // controls inputs
+    const alphaInput = document.getElementById("alphaInput");
+    const horizonInput = document.getElementById("horizonInput");
+    const feedbackGainInput = document.getElementById("feedbackGainInput");
+    const caMinInput = document.getElementById("caMinInput");
+    const caMaxInput = document.getElementById("caMaxInput");
+
+    const trajCheckbox = document.getElementById("trajCheckbox");
+
+    const speedControlCheckbox = document.getElementById("speedControlCheckbox");
+
+    const demoCheckbox = document.getElementById("demoCheckbox");
+    const demoGainInput = document.getElementById("demoGainInput");
+
+    const saveBtn = document.getElementById("saveBtn");
+    const loadBtn = document.getElementById("loadBtn");
+    const loadFileInput = document.getElementById("loadFileInput");
+
+    const safetyPlotCanvas = document.getElementById("safetyPlot");
+    const safetyPlotCtx = safetyPlotCanvas.getContext("2d");
+
+    const safetyHistory = [];   // 1 = no LoS + within airspace, 0 = LoS or our of airspace
+    const safetyAvgSeries = [];
+
+    const featurePlotCanvas = document.getElementById("featurePlot");
+    const featurePlotCtx = featurePlotCanvas.getContext("2d");
+
+    const FEATURE_NAMES = [
+        "d",
+        "d_dot",
+        "sin θ_rel",
+        "cos θ_rel",
+        "dCPA",
+        "tCPA",
+        "crossT",
+        "alongT",
+        "sin θ_orig",
+        "cos θ_orig",
+        "bias"
+    ];
+
+    let prevFeatureStats = null; // { rms: [...], mean: [...] }
+
+    const MAX_MANEUVERS = 20;
+    let CPA_HORIZON_SEC = 300; // UI controlled
+    const GAMMA = 0.99;
+
+    // UI-controlled "tunables"
+    let feedbackGain = 1.0;
+    let caMinDeg = 50;
+    let caMaxDeg = 170;
+
+    let speedControlEnabled = false; // controlled via checkbox
+
+    let useHeuristicDemos = false;
+    let voDemoCounter = 0;
+    const RULE_MARGIN = 1.2; // sepMin * margin threshold for "fully safe" and recapture
+    let demoGain = 0.6;
+    demoGainInput.value = demoGain;
+    let expertMatchCount = 0;
+    let expertTotalCount = 0;
+
+    const env = new ConflictEnv(MAX_MANEUVERS, CPA_HORIZON_SEC);
+
+    const numFeatures = 11; // [d, dDot, sin θ_rel, cos θ_rel, dCPA, tCPA, crossT, alongT, sin θ_orig, cos θ_orig, bias]
+    const numActions = ACTIONS.length;
+
+    // init the Q-learning agent
+    const agent = new QLearningAgent(numFeatures, numActions, 0.01, GAMMA);
+
+    // Shield options
+    let ENABLE_HEADING_STYLE_SHIELD = true;
+    let STYLE_SHIELD_MODE = "original"; // "original" or "exit"
+    let HEADING_STYLE_TOL_DEG = 5;
+
+    let simInterval = null;
+    const BASE_INTERVAL = 50;
+    let simSpeedFactor = 1;
+    let showDebugOverlay = false;
+    let shieldingEnabled = false;
+
+    let currentResultA = null;
+    let currentResultB = null;
+    let currentRatingResult = null;
+    let comparisonCounter = 0;
+    let ratingCounter = 0;
+    let ratingSum = 0;
+    let autoRunning = false;
+
+    let voAutoRunning = false;
+
+    let currentLabel = "A";
+
+    const rewardHistory = [];
+    const avgSeries = [];
+    const REWARD_WINDOW = 50;
+
+    /****************************************************
+        * Historical trajectory traces (ownship) — grayscale
+    ****************************************************/
+    let historyTracksMax = 10;     // configurable via UI
+    const ownshipTrackHistory = []; // array of tracks; each track is [{xNM,yNM}, ...]
+    let currentOwnTrack = [];       // points for the currently running episode
+    let showTrajectories = true;
+
+    function log(msg) {
+      logDiv.textContent += msg + "\n";
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function setStatus(text) {
+      statusBadge.textContent = "Status: " + text;
+    }
+
+    function worldToCanvasX(env, xNM) { return xNM * env.pxPerNM; }
+    function worldToCanvasY(env, yNM) { return yNM * env.pxPerNM; }
+
+    function drawScene(env, conflict, reachedExit) {
+      const w = env.width;
+      const h = env.height;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+
+      const exitX = worldToCanvasX(env, env.exit.xNM);
+      const exitY = worldToCanvasY(env, env.exit.yNM);
+      const exitR = env.exit.radiusNM * env.pxPerNM;
+
+      ctx.beginPath();
+      ctx.fillStyle = reachedExit ? "#00aa00" : "#66cc66";
+      ctx.arc(exitX, exitY, exitR, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = "#004400";
+      ctx.font = "9px sans-serif";
+      ctx.fillText("EXIT", exitX - 10, exitY + 3);
+
+      const ownX = worldToCanvasX(env, env.own.xNM);
+      const ownY = worldToCanvasY(env, env.own.yNM);
+      const sepR = env.sepMinNM * env.pxPerNM;
+
+      ctx.beginPath();
+      ctx.strokeStyle = conflict ? "#ff0000" : "#cccccc";
+      ctx.lineWidth = 1;
+      ctx.arc(ownX, ownY, sepR, 0, 2 * Math.PI);
+      ctx.stroke();
+
+      if (showTrajectories) {
+        drawHistoricalOwnshipTracks(env);
+        drawCurrentOwnshipTrack(env);
+      }
+
+      drawAircraft(ownX, ownY, env.own.heading, "#0077cc");
+      const intX = worldToCanvasX(env, env.intruder.xNM);
+      const intY = worldToCanvasY(env, env.intruder.yNM);
+      drawAircraft(intX, intY, env.intruder.heading, "#cc3300");
+
+      const state = env.getState();
+
+      if (showDebugOverlay) {
+        ctx.fillStyle = "#000000";
+        ctx.font = "12px monospace";
+        ctx.fillText("Distance intruder: " + state.dist.toFixed(2) + " NM", 10, 16);
+        ctx.fillText("Distance to exit: " + state.distExit.toFixed(2) + " NM", 10, 32);
+        ctx.fillText("Steps: " + env.stepCount, 10, 48);
+        ctx.fillText("Trajectory: " + currentLabel, 10, 64);
+        ctx.fillText("Maneuvers: " + env.maneuverCount + "/" + env.maxManeuvers, 10, 80);
+        ctx.fillText("Conflict: " + (state.predictedConflict ? "YES" : "NO"), 10, 96);
+        ctx.fillText("tCPA: " + state.tCPA.toFixed(1) + " s", 10, 112);
+        ctx.fillText("dCPA: " + state.dCPA.toFixed(2) + " NM", 10, 128);
+        ctx.fillText("ε: " + agent.epsilon.toFixed(3), 10, 144);
+        ctx.fillText("Shielding: " + (shieldingEnabled ? "ON" : "OFF"), 10, 160);
+        ctx.fillText("CPA horizon: " + env.cpaHorizonSec + " s", 10, 176);
+        ctx.fillText("VO demos: " + voDemoCounter, 10, 192);
+      }
+
+      if (showDebugOverlay && shieldingEnabled) {
+        drawActionShieldDebug(env, state);
+      }
+    }
+
+    function drawAircraft(x, y, heading, color) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(heading);
+      ctx.fillStyle = color;
+
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.lineTo(-10, -5);
+      ctx.lineTo(-10, 5);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawHistoricalOwnshipTracks(env) {
+        const n = ownshipTrackHistory.length;
+        if (n === 0) return;
+
+        ctx.save();
+        ctx.lineWidth = 2;
+
+        // Draw oldest first, newest last (newest should look strongest)
+        for (let i = 0; i < n; i++) {
+            const track = ownshipTrackHistory[i];
+            if (!track || track.length < 2) continue;
+
+            // i=0 oldest, i=n-1 newest
+            const t = (i + 1) / n;                 // 0..1
+            const alpha = 0.08 + 0.42 * t;         // oldest faint, newest stronger
+            ctx.strokeStyle = `rgba(90, 90, 90, ${alpha.toFixed(3)})`;
+
+            ctx.beginPath();
+            const p0 = track[0];
+            ctx.moveTo(worldToCanvasX(env, p0.xNM), worldToCanvasY(env, p0.yNM));
+            for (let k = 1; k < track.length; k++) {
+            const p = track[k];
+            ctx.lineTo(worldToCanvasX(env, p.xNM), worldToCanvasY(env, p.yNM));
+            }
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+
+    function drawCurrentOwnshipTrack(env) {
+        if (!currentOwnTrack || currentOwnTrack.length < 2) return;
+
+        ctx.save();
+        ctx.lineWidth = 2.5;
+        // Darker grayscale, fully visible (live track)
+        ctx.strokeStyle = "rgba(40, 40, 40, 0.95)";
+
+        ctx.beginPath();
+        const p0 = currentOwnTrack[0];
+        ctx.moveTo(worldToCanvasX(env, p0.xNM), worldToCanvasY(env, p0.yNM));
+        for (let k = 1; k < currentOwnTrack.length; k++) {
+            const p = currentOwnTrack[k];
+            ctx.lineTo(worldToCanvasX(env, p.xNM), worldToCanvasY(env, p.yNM));
+        }
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawActionShieldDebug(env, state) {
+      const safeActions = getSafeActions(env, state);
+      const safeSet = new Set(safeActions);
+
+      const centerX = worldToCanvasX(env, env.own.xNM);
+      const centerY = worldToCanvasY(env, env.own.yNM);
+      const baseHeading = env.own.heading;
+
+      // Base ray length
+      const radius = 60;
+
+      // Offsets along the ray for different speed deltas
+      // (makes the 3 speed options visible per heading)
+      const dvToOffset = { "-10": 0.78, "0": 0.90, "10": 1.02 };
+
+      // Helpers to draw marker shapes
+      function drawCircle(x, y, r) {
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, 2 * Math.PI);
+          ctx.fill();
+      }
+
+      function drawSquare(x, y, s) {
+          ctx.beginPath();
+          ctx.rect(x - s / 2, y - s / 2, s, s);
+          ctx.fill();
+      }
+
+      function drawTriangle(x, y, s, angleRad) {
+          // oriented along the ray direction
+          const a = angleRad;
+          const p1 = { x: x + Math.cos(a) * s,     y: y + Math.sin(a) * s };
+          const p2 = { x: x + Math.cos(a + 2.4) * s, y: y + Math.sin(a + 2.4) * s };
+          const p3 = { x: x + Math.cos(a - 2.4) * s, y: y + Math.sin(a - 2.4) * s };
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.lineTo(p3.x, p3.y);
+          ctx.closePath();
+          ctx.fill();
+      }
+
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.font = "10px monospace";
+
+      // Draw one "spoke" per heading delta (ACTION_DEGS),
+      // and 1 or 3 markers per spoke depending on speedControlEnabled.
+      ACTION_DEGS.forEach((deg) => {
+        const deltaRad = (deg * Math.PI) / 180;
+        const h = baseHeading + deltaRad;
+
+        // Draw the spoke line lightly (color based on whether *any* action on this spoke is safe)
+        // We'll decide "any safe" by checking all matching ACTIONS indices.
+        const relevant = ACTIONS
+          .map((a, idx) => ({ a, idx }))
+          .filter(o => o.a.dH === deg && (speedControlEnabled || o.a.dV === 0));
+
+        const anySafe = relevant.some(o => safeSet.has(o.idx));
+        ctx.strokeStyle = anySafe ? "#00aa00" : "#cc0000";
+
+        const xRay = centerX + Math.cos(h) * radius;
+        const yRay = centerY + Math.sin(h) * radius;
+
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(xRay, yRay);
+        ctx.stroke();
+
+        // Markers for each speed delta on this heading
+        relevant.forEach(({ a, idx }) => {
+          const isSafe = safeSet.has(idx);
+          ctx.fillStyle = isSafe ? "#00aa00" : "#cc0000";
+          ctx.strokeStyle = ctx.fillStyle;
+
+          const t = dvToOffset[String(a.dV)] ?? 0.90;
+          const x2 = centerX + Math.cos(h) * radius * t;
+          const y2 = centerY + Math.sin(h) * radius * t;
+
+          // Shape by speed delta
+          if (a.dV < 0) {
+            drawSquare(x2, y2, 5);
+          } else if (a.dV > 0) {
+            drawTriangle(x2, y2, 4.2, h);
+          } else {
+            drawCircle(x2, y2, 2.6);
+          }
+        });
+
+        // Label the spoke with heading change
+        ctx.fillStyle = "#000000";
+        ctx.fillText(`${deg}°`, xRay + 3, yRay + 3);
+      });
+
+      // Legend (small)
+      ctx.fillStyle = "#000000";
+      ctx.fillText("ΔV: □ -10kt   ○ 0kt   △ +10kt", 10, env.height - 10);
+
+      ctx.restore();
+    }
+
+    /****************************************************
+     * Reward Plot
+     ****************************************************/
+    function drawRewardPlot() {
+      const c = rewardPlotCanvas;
+      const pctx = rewardPlotCtx;
+      const w = c.width;
+      const h = c.height;
+
+      pctx.clearRect(0, 0, w, h);
+      pctx.fillStyle = "#ffffff";
+      pctx.fillRect(0, 0, w, h);
+      pctx.strokeStyle = "#999999";
+      pctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+
+      pctx.fillStyle = "#000000";
+      pctx.font = "10px monospace";
+      pctx.fillText("Avg reward (last " + REWARD_WINDOW + " episodes)", 6, 12);
+
+      if (avgSeries.length === 0) return;
+
+      let minVal = Math.min(...avgSeries);
+      let maxVal = Math.max(...avgSeries);
+      if (minVal === maxVal) { minVal -= 1; maxVal += 1; }
+
+      const leftPad = 30, rightPad = 5, topPad = 18, bottomPad = 12;
+      const plotW = w - leftPad - rightPad;
+      const plotH = h - topPad - bottomPad;
+
+      const n = avgSeries.length;
+      pctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = leftPad + (i / Math.max(1, n - 1)) * plotW;
+        const norm = (avgSeries[i] - minVal) / (maxVal - minVal);
+        const y = topPad + (1 - norm) * plotH;
+        if (i === 0) pctx.moveTo(x, y);
+        else pctx.lineTo(x, y);
+      }
+      pctx.strokeStyle = "#0077cc";
+      pctx.lineWidth = 1.5;
+      pctx.stroke();
+
+      pctx.fillStyle = "#000000";
+      pctx.font = "9px monospace";
+      pctx.fillText(maxVal.toFixed(1), 2, topPad + 5);
+      pctx.fillText(minVal.toFixed(1), 2, topPad + plotH);
+    }
+
+    function drawSuccessPlot() {
+      const c = safetyPlotCanvas, ctx = safetyPlotCtx;
+      const w = c.width, h = c.height;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "#999";
+      ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+
+      const leftPad = 30;
+      const topPad = 18;
+      const bottomPad = 12;
+      const plotH = h - topPad - bottomPad;
+
+      // ---- dashed reference lines at 100%, 50%, 0% ----
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "#cccccc";
+      ctx.lineWidth = 1;
+
+      [0, 0.5, 1.0].forEach(v => {
+        const y = topPad + (1 - v) * plotH;
+        ctx.beginPath();
+        ctx.moveTo(leftPad, y);
+        ctx.lineTo(w - 5, y);
+        ctx.stroke();
+      });
+
+      ctx.restore();
+
+      // Title
+      ctx.fillStyle = "#000";
+      ctx.font = "10px monospace";
+      ctx.fillText("Success rate (no LoS, in bounds)", 6, 12);
+
+      // ---- Y-axis percentage labels ----
+      ctx.font = "9px monospace";
+      ctx.fillText("100%", 2, topPad + 5);
+      ctx.fillText("50%",  6, topPad + plotH / 2 + 3);
+      ctx.fillText("0%",   10, topPad + plotH + 2);
+
+      // ---- Plot curve ----
+      if (!safetyAvgSeries.length) return;
+
+      ctx.beginPath();
+      safetyAvgSeries.forEach((v, i) => {
+        const x = leftPad + i * (w - leftPad - 5) / Math.max(1, safetyAvgSeries.length - 1);
+        const y = topPad + (1 - v) * plotH;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+
+      ctx.strokeStyle = "#00aa00";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+
+    function drawFeatureImportance(agent) {
+        const ctx = featurePlotCtx;
+        const c = featurePlotCanvas;
+        const w = c.width, h = c.height;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+
+        const { rms, mean } = computeFeatureStats(agent);
+        const prev = prevFeatureStats;
+
+        const leftPad = 80;
+        const rightPad = 10;
+        const topPad = 18;
+        const bottomPad = 10;
+
+        const plotW = w - leftPad - rightPad;
+        const plotH = h - topPad - bottomPad;
+        const midX = leftPad + plotW / 2;
+
+        const barH = plotH / FEATURE_NAMES.length * 0.75;
+        const maxVal = Math.max(...rms, 1e-6);
+
+        // Title
+        ctx.fillStyle = "#000";
+        ctx.font = "10px monospace";
+        ctx.fillText("Feature importance (RMS, signed)", 6, 12);
+
+        // Zero line
+        ctx.strokeStyle = "#888";
+        ctx.beginPath();
+        ctx.moveTo(midX, topPad);
+        ctx.lineTo(midX, h - bottomPad);
+        ctx.stroke();
+
+        // ---- Previous snapshot overlay (light gray) ----
+        if (prev) {
+            ctx.fillStyle = "#cccccc";
+            FEATURE_NAMES.forEach((name, i) => {
+                const y = topPad + (i + 0.5) * (plotH / FEATURE_NAMES.length);
+                const mag = (prev.rms[i] / maxVal);
+                const sign = Math.sign(prev.mean[i]) || 1;
+                const len = mag * (plotW / 2);
+
+                if (sign > 0) {
+                ctx.fillRect(midX, y - barH / 2, len, barH);
+                } else {
+                ctx.fillRect(midX - len, y - barH / 2, len, barH);
+                }
+            });
+        }
+
+        // Current Bars
+        FEATURE_NAMES.forEach((name, i) => {
+            const y =
+            topPad +
+            (i + 0.5) * (plotH / FEATURE_NAMES.length);
+
+            const mag = rms[i] / maxVal;
+            const sign = Math.sign(mean[i]) || 1;
+            const len = mag * (plotW / 2);
+
+            ctx.fillStyle = sign > 0 ? "#0077cc" : "#cc3300";
+
+            if (sign > 0) {
+                ctx.fillRect(midX, y - barH / 2, len, barH);
+            } else {
+                ctx.fillRect(midX - len, y - barH / 2, len, barH);
+            }
+
+            // Feature label
+            ctx.fillStyle = "#000";
+            ctx.font = "9px monospace";
+            ctx.fillText(name, 4, y + 3);
+        });
+
+        prevFeatureStats = { rms: rms.slice(), mean: mean.slice() };
+    }
+
+    /****************************************************
+     * Run one trajectory
+     ****************************************************/
+    function runSingleTrajectory(label, onDone, options = {}) {
+      if (simInterval !== null) return;
+
+      const auto = !!options.auto;
+      const test = !!options.test;
+
+      let episodeOutOfBoundsPenalty = false;
+
+      currentLabel = label;
+      env.reset(test, options.scenario || null);
+
+      // start recording the current episode ownship track
+      currentOwnTrack = [{ xNM: env.own.xNM, yNM: env.own.yNM }];
+      drawScene(env, false, false);
+
+      const trajectory = [];
+      const actionHistory = [];
+      let totalReward = 0;
+      let episodeConflict = false;
+      let episodeOutOfBounds = false;
+      let episodeReachedExit = false;
+      let finalState = env.getState();
+      let firstNonZeroAction = null;
+      let firstNonZeroStep = null;
+
+      // --- reset expert agreement counters (per episode) ---
+      if (auto && useHeuristicDemos) {
+        expertMatchCount = 0;
+        expertTotalCount = 0;
+      }
+
+      setStatus("running trajectory " + label);
+
+      simInterval = setInterval(() => {
+        const state = env.getState();
+        const greedyOnly = test;
+        const epsilon = greedyOnly ? 0.0 : agent.epsilon;
+
+        // in pairwise-B, optionally avoid a specific action at a specific step
+        let avoid = null;
+        if (options && options.avoidStep !== null && options.avoidStep !== undefined) {
+            if (env.stepCount === options.avoidStep && options.avoidAction !== null && options.avoidAction !== undefined) {
+                avoid = options.avoidAction;
+            }
+        }
+
+        let sample;
+
+        // Compute expert once per step (only if needed)
+        let expert = null;
+        if (useHeuristicDemos || options.policy === "heuristic") {
+          expert = selectRuleBasedVOPassBehind(env, state, shieldingEnabled);
+        }
+
+        if (options.policy === "heuristic") {
+          // pure heuristic rollout
+          sample = expert;
+        }
+        // Expert-guided exploration: when we would explore, use expert action instead of random.
+        else if (auto && useHeuristicDemos && !greedyOnly && Math.random() < agent.epsilon && expert && expert.action != null) {
+          sample = { action: expert.action, phi: expert.phi };
+        }
+        else {
+          sample = selectAction(env, agent, state, epsilon, greedyOnly, shieldingEnabled, avoid);
+        }
+
+        // log states for feature relevance plot (needed by drawFeatureRelevance())
+        agent.recentStates.push(state);
+        if (agent.recentStates.length > 500) agent.recentStates.shift();
+
+        const { state: newState, done, conflict, outOfBounds, outOfBoundsPenalty, reachedExit, appliedAction, reward } =
+          env.step(sample.action);
+
+        episodeOutOfBounds = episodeOutOfBounds || outOfBounds;
+        episodeOutOfBoundsPenalty = episodeOutOfBoundsPenalty || outOfBoundsPenalty;
+
+        // record the first non-zero maneuver (applied action) and the step it occurred
+        const isNonZeroAction = (idx) =>
+          ACTIONS[idx].dH !== 0 || (speedControlEnabled && ACTIONS[idx].dV !== 0);
+
+        if (firstNonZeroAction === null && isNonZeroAction(appliedAction)) {
+          firstNonZeroAction = appliedAction;
+          // env.stepCount was incremented inside env.step(); so the decision step index is stepCount - 1
+          firstNonZeroStep = env.stepCount - 1;
+        }
+
+        if (auto) {
+
+          // --- expert demonstration (VO pass-behind) imitation hook ---
+          if (useHeuristicDemos && expert && expert.action != null) {
+
+            const qs = agent.qValues(sample.phi);
+
+            // Allowed actions should match what the agent is allowed to pick (shielding + speed toggle)
+            let allowed = shieldingEnabled ? getSafeActions(env, state)
+                    : [...Array(ACTIONS.length).keys()];
+
+            if (!speedControlEnabled) allowed = allowed.filter(i => ACTIONS[i].dV === 0);
+
+            const greedyA = greedyActionFromQ(qs, allowed);
+
+            // Compare greedy policy (no epsilon) against expert
+
+            expertTotalCount++;
+            if (greedyA === expert.action) expertMatchCount++;
+
+            // Imitate during conflict OR during the "restore" phase (intruder behind & safe)
+            const inRestorePhase = intruderBehindNow(env, state) && !state.predictedConflict;
+
+            const imitateNow = state.predictedConflict || newState.predictedConflict || inRestorePhase;
+
+            if (imitateNow) {
+              const aE = expert.action;
+
+              // Stronger early imitation so it isn't drowned out by TD noise
+              const demoScale = (agent.episodeCount < 1000) ? 5.0 : 1.0;
+              const gain = demoScale * demoGain;
+
+              // IMPORTANT: compare expert against the ACTUALLY APPLIED action (after gating/budget)
+              if (aE !== appliedAction) {
+                agent.imitatePair(sample.phi, aE, appliedAction, gain, 0.2);
+              } else {
+                agent.imitateStep(sample.phi, aE, gain, 0.2);
+              }
+              voDemoCounter++;
+            }
+          }
+
+          // Standard TD update
+          agent.update(sample.phi, appliedAction, reward, newState, done);
+          totalReward += reward;
+        } else if (!test) {
+          trajectory.push({ phi: sample.phi, action: appliedAction });
+        }
+
+        if (test) { 
+          const a = ACTIONS[appliedAction];
+          actionHistory.push(`${a.dH}deg/${a.dV}kt`);
+        }
+
+        // record ownship position after stepping
+        currentOwnTrack.push({ xNM: env.own.xNM, yNM: env.own.yNM });
+
+        episodeConflict = episodeConflict || conflict;
+        episodeOutOfBounds = episodeOutOfBounds || outOfBounds;
+        episodeReachedExit = episodeReachedExit || reachedExit;
+        finalState = newState;
+
+        drawScene(env, conflict, episodeReachedExit);
+
+        if (done) {
+          clearInterval(simInterval);
+          simInterval = null;
+
+          if (auto) agent.endEpisode();
+
+          log(
+            `Trajectory ${label} finished. \n` +
+            `LoS: ${episodeConflict ? "💥 YES" : "✅ NO"}, \n` +
+            `Reached exit: ${episodeReachedExit ? "🎯 YES" : "NO"}, \n` +
+            `Final dist to exit: ${finalState.distExit.toFixed(2)} NM, \n` +
+            `Maneuvers: ${env.maneuverCount}/${env.maxManeuvers},\n` +
+            (auto ? `Total reward: ${totalReward.toFixed(2)},\n` : "") +
+            `Shielding: ${shieldingEnabled ? "ON" : "OFF"}` + '\n'
+          );
+
+          setStatus("finished trajectory " + label);
+
+          // store finished episode track in history (for greyscale rendering)
+          if (currentOwnTrack && currentOwnTrack.length > 1) {
+             ownshipTrackHistory.push(currentOwnTrack);
+             while (ownshipTrackHistory.length > historyTracksMax) {
+                ownshipTrackHistory.shift(); // drop oldest
+             }
+          }
+
+          onDone({ 
+            trajectory, 
+            conflict: episodeConflict, 
+            outOfBounds: episodeOutOfBounds, 
+            outOfBoundsPenalty: episodeOutOfBoundsPenalty,
+            reachedExit: episodeReachedExit, 
+            finalState, 
+            totalReward, 
+            actionHistory, 
+            firstNonZeroAction, 
+            firstNonZeroStep  
+          });
+        }
+      }, BASE_INTERVAL / simSpeedFactor);
+    }
+
+    /****************************************************
+     * Operating Modes
+     ****************************************************/
+
+    // pair-wise trajectory/episode comparison
+    function runPairwiseComparison() {
+        if (simInterval !== null) return;
+        runBtn.disabled = true;
+        prefDiv.style.display = "none";
+        ratingDiv.style.display = "none";
+        setStatus("starting pairwise comparison");
+
+        // clear all previous trajectories
+        ownshipTrackHistory.splice(0, ownshipTrackHistory.length);
+
+        currentResultA = null;
+        currentResultB = null;
+
+        // sample one geometry and freeze it for both A and B
+        env.reset(false);
+        const sharedScenario = JSON.parse(JSON.stringify(env.currentScenario));
+
+        runSingleTrajectory("A", (resultA) => {
+            currentResultA = resultA;
+
+            // force B to differ at A's first non-zero maneuver step (if any)
+            const avoidStep = resultA.firstNonZeroStep;
+            const avoidAction = resultA.firstNonZeroAction;
+
+            runSingleTrajectory("B", (resultB) => {
+                currentResultB = resultB;
+                prefDiv.style.display = "block";
+                setStatus("awaiting preference (A vs B)");
+                }, {
+                  auto: false,
+                  scenario: sharedScenario,
+                  avoidStep,
+                  avoidAction
+                }
+            );
+
+        }, { auto: false, scenario: sharedScenario });
+    }
+
+    // single trajectory/episode rating
+    function runRatingEpisode() {
+      if (simInterval !== null) return;
+      runBtn.disabled = true;
+      prefDiv.style.display = "none";
+      ratingDiv.style.display = "none";
+      setStatus("running rated episode");
+
+      currentRatingResult = null;
+
+      // clear all previous trajectories
+      ownshipTrackHistory.splice(0, ownshipTrackHistory.length);
+
+      runSingleTrajectory("R", (result) => {
+        currentRatingResult = result;
+        ratingDiv.style.display = "block";
+        setStatus("awaiting rating (1–5)");
+      }, { auto: false });
+    }
+
+    // automatic Q-learning
+    function runAutoEpisode() {
+      if (voAutoRunning) return;
+      if (simInterval !== null) return;
+
+      if (!autoRunning) {
+        autoRunning = true;
+        log("\n=== AUTO MODE: Starting continuous Q-learning training ===\n");
+      }
+
+      prefDiv.style.display = "none";
+      ratingDiv.style.display = "none";
+      setStatus("running automatic RL episode");
+
+      runSingleTrajectory("Auto", (result) => {
+        log(`Automatic RL episode: ${agent.episodeCount}. Total reward: ${result.totalReward.toFixed(2)}, ε=${agent.epsilon.toFixed(3)}, Shielding=${shieldingEnabled ? "ON" : "OFF"}.`);
+
+        if (expertTotalCount > 0) {
+          const rate = 100 * expertMatchCount / expertTotalCount;
+          log(`[DIAG] Expert agreement: ${rate.toFixed(1)}% (${expertMatchCount}/${expertTotalCount})`);
+        }
+
+        rewardHistory.push(result.totalReward);
+        if (rewardHistory.length > REWARD_WINDOW) rewardHistory.shift();
+
+        if (rewardHistory.length > 0) {
+          const sum = rewardHistory.reduce((a, b) => a + b, 0);
+          const avg = sum / rewardHistory.length;
+          avgRewardInfo.textContent = `Avg R(${REWARD_WINDOW}): ${avg.toFixed(2)}`;
+          avgSeries.push(avg);
+          if (avgSeries.length > 300) avgSeries.shift();
+          drawRewardPlot();
+        }
+
+        // oob = Out of Bounds (thus leaving the airspace on the "wrong" sides
+        const oobBad = (result.outOfBoundsPenalty !== undefined) ? result.outOfBoundsPenalty : result.outOfBounds;
+        const success = (!result.conflict && !oobBad) ? 1 : 0;
+
+        safetyHistory.push(success);
+        if (safetyHistory.length > REWARD_WINDOW) safetyHistory.shift();
+        safetyAvgSeries.push(safetyHistory.reduce((a,b)=>a+b,0)/safetyHistory.length);
+        drawSuccessPlot();
+
+        if (agent.episodeCount % 10 === 0) {
+            drawFeatureImportance(agent);
+        }
+
+        if (autoRunning) {
+          setTimeout(runAutoEpisode, 20);
+        } else {
+          runBtn.disabled = false;
+          setStatus("idle");
+        }
+      }, { auto: true });
+    }
+
+    // run pure heuristic VO rule-based episode
+    function runVORuleAutoEpisode() {
+      if (simInterval !== null) return;
+
+      if (!voAutoRunning) return;
+
+      prefDiv.style.display = "none";
+      ratingDiv.style.display = "none";
+      setStatus("running VO RULE (autorun)");
+
+      runSingleTrajectory(
+        "RULE",
+        (result) => {
+
+          // small log, keep short to avoid "spam"
+          log(`VO RULE demo episode. LoS=${result.conflict ? "YES" : "NO"}, steps=${env.stepCount}, Shielding=${shieldingEnabled ? "ON" : "OFF"}.`);
+
+          // chain next
+          if (voAutoRunning) {
+            setTimeout(runVORuleAutoEpisode, 20);
+          } else {
+            runBtn.disabled = false;
+            setStatus("idle");
+          }
+        },
+        { auto: false, policy: "heuristic" } // heuristic policy; demo hook handles training if enabled
+      );
+    }
+
+    // for updating Q-values after pairwise comparison
+    function handlePreference(choice) {
+      if (!currentResultA || !currentResultB) return;
+
+      let prefText = "";
+      if (choice === "A") {
+        agent.updateFromPreference(currentResultA.trajectory, currentResultB.trajectory, feedbackGain);
+        prefText = "A preferred over B -> Q(A+) & Q(B-)";
+      } else if (choice === "B") {
+        agent.updateFromPreference(currentResultB.trajectory, currentResultA.trajectory, feedbackGain);
+        prefText = "B preferred over A -> Q(B+) & Q(A-)";
+      } else {
+        prefText = "No clear preference -> no Q-update.";
+      }
+
+      comparisonCounter++;
+      comparisonInfo.textContent = "Comparisons: " + comparisonCounter;
+      log("Comparison " + comparisonCounter + ": " + prefText);
+
+      prefDiv.style.display = "none";
+      runBtn.disabled = false;
+      setStatus("idle");
+    }
+
+    // for updating Q-values after episode rating
+    function handleRating(r) {
+      if (!currentRatingResult) return;
+
+      const ratingSignalRaw = (r - 3) / 2;   // [-1, +1]
+      const ratingSignal = feedbackGain * ratingSignalRaw;
+      agent.updateFromRating(currentRatingResult.trajectory, ratingSignal);
+
+      ratingCounter++;
+      ratingSum += r;
+      const avg = ratingSum / ratingCounter;
+      ratingInfo.textContent = "Episodes rated: " + ratingCounter + " (avg: " + avg.toFixed(2) + ")";
+
+      log(`Rated episode: ${r} (signal ${ratingSignal.toFixed(2)}). Trajectory length: ${currentRatingResult.trajectory.length}.`);
+
+      ratingDiv.style.display = "none";
+      runBtn.disabled = false;
+      setStatus("idle");
+    }
+
+    // evaluation episode: currently a single, fixed HEAD-ON conflict geometry the
+    // Q-learning has not encountered
+    function runTestEpisode() {
+      if (simInterval !== null) return;
+
+      autoRunning = false;
+      prefDiv.style.display = "none";
+      ratingDiv.style.display = "none";
+
+      log("\n=== TEST: Greedy policy on fixed scenario (no learning) ===");
+      setStatus("running greedy test");
+
+      // for testing, don't explore, thus set epsilon to ZERO
+      const oldEpsilon = agent.epsilon;
+      agent.epsilon = 0.0;
+
+      runSingleTrajectory("Test", (result) => {
+        agent.epsilon = oldEpsilon;
+
+        log(
+          "Test episode result: " +
+          `Conflict=${result.conflict ? "YES" : "NO"}, ` +
+          `Reached exit=${result.reachedExit ? "YES" : "NO"}, ` +
+          `Final dist to exit=${result.finalState.distExit.toFixed(2)} NM, ` +
+          `Maneuvers=${env.maneuverCount}/${env.maxManeuvers}, ` +
+          `Shielding=${shieldingEnabled ? "ON" : "OFF"}`
+        );
+
+        if (result.actionHistory && result.actionHistory.length > 0) {
+          log("Greedy actions (deg) over time: " + result.actionHistory.join(", "));
+        } else {
+          log("No control actions taken in test scenario.");
+        }
+
+        setStatus("idle");
+      }, { auto: false, test: true });
+    }
+
+    /****************************************************
+     * Save/Load JSON (agent + settings)
+     ****************************************************/
+    const SAVE_VERSION = 1;
+
+    function buildSaveObject() {
+        return {
+            version: SAVE_VERSION,
+            savedAtISO: new Date().toISOString(),
+
+            // --- Core fixed config to validate compatibility ---
+            actionDegs: ACTION_DEGS.slice(),
+            speedDeltas: SPEED_DELTAS.slice(),
+            actions: ACTIONS.map(a => ({ dH: a.dH, dV: a.dV })), // explicit combined actions
+
+            numFeatures,
+            numActions,
+
+            // --- Agent ---
+            agent: {
+              alpha: agent.alpha,
+              gamma: agent.gamma,
+              epsilon: agent.epsilon,
+              epsilonMin: agent.epsilonMin,
+              epsilonDecay: agent.epsilonDecay,
+              episodeCount: agent.episodeCount,
+              weights: agent.weights
+            },
+
+            // --- Environment / scenario generation / shields ---
+            env: {
+              maxManeuvers: env.maxManeuvers,
+              cpaHorizonSec: env.cpaHorizonSec,
+              sepMinNM: env.sepMinNM,
+              dtSec: env.dtSec
+            },
+
+            settings: {
+              shieldingEnabled,
+              ENABLE_HEADING_STYLE_SHIELD,
+              STYLE_SHIELD_MODE,
+              HEADING_STYLE_TOL_DEG,
+              feedbackGain,
+              caMinDeg,
+              caMaxDeg,
+              speedControlEnabled
+            }
+        };
+    }
+
+    function arraysEqual(a, b) {
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+    }
+
+    function applyLoadedObject(data) {
+        // Basic validation
+        if (!data || typeof data !== "object") throw new Error("Invalid JSON object.");
+
+        if (data.version !== SAVE_VERSION) {
+            // Still try, but warn
+            log(`⚠️ Save version mismatch (file=${data.version}, expected=${SAVE_VERSION}). Trying to load anyway...`);
+        }
+
+        // Compatibility checks
+        if (!arraysEqual(data.actionDegs, ACTION_DEGS)) {
+            throw new Error("Incompatible ACTION_DEGS in file (action set differs).");
+        }
+
+        // validate speed deltas / combined action space
+        if (data.speedDeltas) {
+          if (!arraysEqual(data.speedDeltas, SPEED_DELTAS)) {
+            throw new Error("Incompatible SPEED_DELTAS in file.");
+          }
+        }
+
+        if (data.actions) {
+          if (data.actions.length !== ACTIONS.length) {
+            throw new Error("Incompatible combined ACTIONS length.");
+          }
+          for (let i = 0; i < ACTIONS.length; i++) {
+            const a0 = ACTIONS[i];
+            const a1 = data.actions[i];
+            if (a0.dH !== a1.dH || a0.dV !== a1.dV) {
+              throw new Error("Incompatible combined ACTIONS definition.");
+            }
+          }
+        }
+
+        if (data.numFeatures !== numFeatures || data.numActions !== numActions) {
+            throw new Error("Incompatible feature/action dimensions in file.");
+        }
+
+        // --- Restore agent ---
+        const A = data.agent;
+        if (!A || !Array.isArray(A.weights) || A.weights.length !== numActions) {
+            throw new Error("Agent weights missing or wrong shape.");
+        }
+        // Weights shape check
+        for (let a = 0; a < numActions; a++) {
+            if (!Array.isArray(A.weights[a]) || A.weights[a].length !== numFeatures) {
+            throw new Error(`Agent weights wrong shape at action ${a}.`);
+            }
+        }
+
+        agent.alpha = Number(A.alpha);
+        agent.gamma = Number(A.gamma);
+        agent.epsilon = Number(A.epsilon);
+        agent.epsilonMin = Number(A.epsilonMin);
+        agent.epsilonDecay = Number(A.epsilonDecay);
+        agent.episodeCount = Number(A.episodeCount);
+
+        // Deep copy weights
+        agent.weights = A.weights.map(row => row.map(Number));
+
+        // --- Restore env / horizon / maneuvers ---
+        const E = data.env || {};
+        if (Number.isFinite(E.maxManeuvers)) env.maxManeuvers = E.maxManeuvers;
+        if (Number.isFinite(E.cpaHorizonSec)) {
+            env.cpaHorizonSec = E.cpaHorizonSec;
+            CPA_HORIZON_SEC = E.cpaHorizonSec;
+        }
+
+        // --- Restore settings ---
+        const S = data.settings || {};
+        if (typeof S.shieldingEnabled === "boolean") shieldingEnabled = S.shieldingEnabled;
+
+        if (typeof S.speedControlEnabled === "boolean") {
+          speedControlEnabled = S.speedControlEnabled;
+        }
+
+        if (typeof S.ENABLE_HEADING_STYLE_SHIELD === "boolean") {
+            ENABLE_HEADING_STYLE_SHIELD = S.ENABLE_HEADING_STYLE_SHIELD;
+        }
+        if (typeof S.STYLE_SHIELD_MODE === "string") {
+            // only accept known modes
+            if (S.STYLE_SHIELD_MODE === "original" || S.STYLE_SHIELD_MODE === "exit") {
+            STYLE_SHIELD_MODE = S.STYLE_SHIELD_MODE;
+            }
+        }
+        if (Number.isFinite(S.HEADING_STYLE_TOL_DEG)) HEADING_STYLE_TOL_DEG = S.HEADING_STYLE_TOL_DEG;
+
+        if (Number.isFinite(S.feedbackGain)) feedbackGain = S.feedbackGain;
+        if (Number.isFinite(S.caMinDeg)) caMinDeg = S.caMinDeg;
+        if (Number.isFinite(S.caMaxDeg)) caMaxDeg = S.caMaxDeg;
+
+        // Clamp CA range to sane bounds and ordering
+        caMinDeg = Math.max(0, Math.min(179, caMinDeg));
+        caMaxDeg = Math.max(caMinDeg + 1, Math.min(179, caMaxDeg));
+
+        // --- Sync UI inputs to loaded values (if inputs exist) ---
+        if (typeof alphaInput !== "undefined") alphaInput.value = String(agent.alpha);
+        if (typeof horizonInput !== "undefined") horizonInput.value = String(env.cpaHorizonSec);
+        if (typeof feedbackGainInput !== "undefined") feedbackGainInput.value = String(feedbackGain);
+        if (typeof caMinInput !== "undefined") caMinInput.value = String(caMinDeg);
+        if (typeof caMaxInput !== "undefined") caMaxInput.value = String(caMaxDeg);
+        if (typeof shieldCheckbox !== "undefined") shieldCheckbox.checked = shieldingEnabled;
+        if (typeof speedControlCheckbox !== "undefined") speedControlCheckbox.checked = speedControlEnabled;
+
+        // Redraw current scene with updated shielding checkbox state
+        const st = env.getState();
+        drawScene(env, st.dist < env.sepMinNM, st.distExit < env.exit.radiusNM);
+
+        log(
+            "✅ Loaded agent + settings from JSON " +
+            `(speed control: ${speedControlEnabled ? "ON" : "OFF"}).`
+        );
+    }
+
+    /****************************************************
+     * UI wiring / callback functions
+     ****************************************************/
+
+    runBtn.addEventListener("click", () => {
+      const mode = modeSelect.value;
+
+      if (mode === "auto") {
+        if (!autoRunning) {
+          autoRunning = true;
+          runBtn.disabled = false;
+          runBtn.textContent = "Stop Auto";
+          runAutoEpisode();
+        } else {
+          autoRunning = false;
+          runBtn.disabled = false;
+          runBtn.textContent = "Run (auto RL)";
+          setStatus("idle");
+        }
+        return;
+      }
+
+      autoRunning = false;
+      if (mode === "pairwise") {
+        runBtn.textContent = "Run (A vs B)";
+        runPairwiseComparison();
+      } else if (mode === "rating") {
+        runBtn.textContent = "Run (rating)";
+        runRatingEpisode();
+      } else if (mode === "heur_vo_rule") {
+        // Stop any RL auto mode
+        autoRunning = false;
+
+        if (!voAutoRunning) {
+          voAutoRunning = true;
+
+          // Force fast-forward
+          simSpeedFactor = 8;
+          speedBtn.style.display = "inline-block";
+          speedBtn.textContent = "Go slow"; // since we're fast now
+
+          log("\n=== VO RULE: Starting continuous autorun demonstrations ===\n");
+          runBtn.textContent = "Stop VO Auto";
+          runBtn.disabled = false;
+
+          runVORuleAutoEpisode();
+        } else {
+          voAutoRunning = false;
+          runBtn.textContent = "Run (VO RULES)";
+          runBtn.disabled = false;
+          setStatus("idle");
+          log("\n=== VO RULE: Stopped autorun demonstrations ===\n");
+        }
+        return;
+      }
+    });
+
+    speedBtn.addEventListener("click", () => {
+      if (simSpeedFactor === 1) {
+        simSpeedFactor = 8;
+        speedBtn.textContent = "Go slow";
+      } else {
+        simSpeedFactor = 1;
+        speedBtn.textContent = "Go fast";
+      }
+      log("Simulation speed set to ×" + simSpeedFactor);
+    });
+
+    testBtn.addEventListener("click", () => runTestEpisode());
+
+    debugBtn.addEventListener("click", () => {
+      showDebugOverlay = !showDebugOverlay;
+      debugBtn.textContent = showDebugOverlay ? "Debug: ON" : "Debug: OFF";
+      log("Debug overlay " + (showDebugOverlay ? "enabled" : "disabled") + ".");
+      const state = env.getState();
+      drawScene(env, state.dist < env.sepMinNM, state.distExit < env.exit.radiusNM);
+    });
+
+    shieldCheckbox.addEventListener("change", () => {
+      shieldingEnabled = shieldCheckbox.checked;
+      log("Shielding " + (shieldingEnabled ? "ENABLED" : "DISABLED") + ".");
+      const state = env.getState();
+      drawScene(env, state.dist < env.sepMinNM, state.distExit < env.exit.radiusNM);
+    });
+
+    document.querySelectorAll("#pref button[data-choice]").forEach((btn) => {
+      btn.addEventListener("click", () => handlePreference(btn.getAttribute("data-choice")));
+    });
+
+    document.querySelectorAll("#rating button[data-r]").forEach((btn) => {
+      btn.addEventListener("click", () => handleRating(parseInt(btn.getAttribute("data-r"), 10)));
+    });
+
+    modeSelect.addEventListener("change", () => {
+      const mode = modeSelect.value;
+      autoRunning = false;
+      voAutoRunning = false;
+
+      if (mode === "auto") {
+        speedBtn.style.display = "inline-block";
+      } else {
+        speedBtn.style.display = "none";
+        simSpeedFactor = 1;
+        speedBtn.textContent = "Go fast";
+      }
+
+      if (mode === "pairwise") {
+        runBtn.disabled = false;
+        runBtn.textContent = "Run (A vs B)";
+      } else if (mode === "rating") {
+        runBtn.disabled = false;
+        runBtn.textContent = "Run (single rated episode)";
+      } else if (mode === "heur_vo_rule") {
+        runBtn.disabled = false;
+        runBtn.textContent = "Run (VO RULES)";
+        speedBtn.style.display = "inline-block"; // show it since VO uses autorun/fast
+        speedBtn.textContent = "Go slow";
+      }
+      else {
+        runBtn.disabled = false;
+        runBtn.textContent = "Run (auto RL)";
+      }
+    });
+
+    // --- controls wiring ---
+
+    alphaInput.addEventListener("change", () => {
+      const a = parseFloat(alphaInput.value);
+      if (!Number.isFinite(a) || a < 0) return;
+      agent.alpha = a;
+      log(`Set learning rate α = ${agent.alpha.toFixed(4)}`);
+    });
+
+    trajCheckbox.addEventListener("change", () => {
+        showTrajectories = trajCheckbox.checked;
+        log("Trajectories " + (showTrajectories ? "SHOWN" : "HIDDEN") + ".");
+        const st = env.getState();
+        drawScene(env, st.dist < env.sepMinNM, st.distExit < env.exit.radiusNM);
+    });
+
+    horizonInput.addEventListener("change", () => {
+      const h = parseInt(horizonInput.value, 10);
+      if (!Number.isFinite(h) || h < 1) return;
+      CPA_HORIZON_SEC = h;
+      env.cpaHorizonSec = h;
+      log(`Set CPA horizon = ${env.cpaHorizonSec} s`);
+    });
+
+    feedbackGainInput.addEventListener("change", () => {
+      const g = parseFloat(feedbackGainInput.value);
+      if (!Number.isFinite(g) || g < 0) return;
+      feedbackGain = g;
+      log(`Set human feedback gain = ${feedbackGain.toFixed(2)}`);
+    });
+
+    function syncConflictAngleRange() {
+      const mn = parseInt(caMinInput.value, 10);
+      const mx = parseInt(caMaxInput.value, 10);
+      if (!Number.isFinite(mn) || !Number.isFinite(mx)) return;
+
+      // keep sane ordering
+      caMinDeg = Math.max(0, Math.min(179, mn));
+      caMaxDeg = Math.max(caMinDeg + 1, Math.min(179, mx));
+
+      // reflect possible clamping back into UI
+      caMinInput.value = String(caMinDeg);
+      caMaxInput.value = String(caMaxDeg);
+
+      log(`Set conflict angle range: |CA| ∈ [${caMinDeg}, ${caMaxDeg}] deg`);
+    }
+
+    caMinInput.addEventListener("change", syncConflictAngleRange);
+    caMaxInput.addEventListener("change", syncConflictAngleRange);
+
+    saveBtn.addEventListener("click", () => {
+        try {
+            const obj = buildSaveObject();
+            const json = JSON.stringify(obj, null, 2);
+            const blob = new Blob([json], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `cdr_Qagent_v${SAVE_VERSION}_${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+
+            URL.revokeObjectURL(url);
+            log("💾 Saved agent + settings to JSON.");
+        } catch (e) {
+            log("❌ Save failed: " + (e?.message ?? e));
+        }
+        });
+
+    loadBtn.addEventListener("click", () => {
+        loadFileInput.value = ""; // allow re-loading same file
+        loadFileInput.click();
+    });
+
+    loadFileInput.addEventListener("change", async () => {
+        const file = loadFileInput.files && loadFileInput.files[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+
+            // Don’t load mid-sim (keeps it simple and consistent)
+            if (simInterval !== null) {
+            log("⚠️ Stop the current simulation before loading a new agent/settings.");
+            return;
+            }
+
+            applyLoadedObject(data);
+        } catch (e) {
+            log("❌ Load failed: " + (e?.message ?? e));
+        }
+    });
+
+    speedControlCheckbox.addEventListener("change", () => {
+      speedControlEnabled = speedControlCheckbox.checked;
+      log("Speed control " + (speedControlEnabled ? "ENABLED" : "DISABLED") + ".");
+      const st = env.getState();
+      drawScene(env, st.dist < env.sepMinNM, st.distExit < env.exit.radiusNM);
+    });
+
+    demoCheckbox.addEventListener("change", () => {
+        useHeuristicDemos = demoCheckbox.checked;
+        log("Heuristic demonstrations " + (useHeuristicDemos ? "ENABLED" : "DISABLED") + ".");
+    });
+
+    demoGainInput.addEventListener("change", () => {
+        const v = parseFloat(demoGainInput.value);
+        if (!Number.isFinite(v) || v < 0) return;
+        demoGain = v;
+        log(`Set demo gain = ${demoGain.toFixed(2)}`);
+    });
+
+    // Initial draw
+    drawScene(env, false, false);
+    drawRewardPlot();
+    drawSuccessPlot();
+    drawFeatureImportance(agent);
+    log(
+      "Ready.\n" +
+      "World: 150×100 NM, speeds 400–450 kt, " +
+      "LoS threshold: 5 NM, CPA horizon: " + CPA_HORIZON_SEC + " s. " +
+      "At each episode, a new random conflict geometry is generated, involving random aircraft speeds.\n" +
+      "Q-learning over CPA-based and route restorization features. " +
+      "Agent behavior can be shaped by action shielding, human feedback and/or heuristic demonstrations.\n" +
+      "Top-right plots show moving average of success rate and collected reward over recent automatic episodes. " +
+      "Feature importance plot reveals magnitude and direction of feature impact on the learned policy.\n"
+    );
+
+    // init settings
+    shieldCheckbox.checked = shieldingEnabled;
+    alphaInput.value = agent.alpha;
+    modeSelect.value = "auto";
+    speedBtn.style.display = "inline-block";
+
+    setStatus("idle");
+
+  </script>
+</body>
+</html>
