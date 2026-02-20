@@ -64,7 +64,7 @@ It is not certified, validated, or suitable for real-world aviation or air traff
 
 ## 📜 License and Citation
 
-This demonstrator is provided for **academic research and commercial use** under
+This demonstrator is provided for **education, academic research and commercial use** under
 the **GPL-3** license.
 
 You are free to download and/or fork the project and:
@@ -84,19 +84,18 @@ You must:
 If you use or adapt this application in your research or education, please cite it as follows:
 
 #### APA format
-> Borst, C. (2025). *Modular Open-Source Survey Framework for Human–Machine Interaction Research.*  
-> Delft University of Technology. DOI: https://doi.org/10.5281/zenodo.17495928. Available at: [https://github.com/clarkborst/hmisurveys](https://github.com/clarkborst/hmisurveys)
+> Borst, C. (2026). *CDRTrainer: Safe Reinforcement Learning with Human Feedback and Expert Demonstrations for 2D Aircraft Conflict Resolution.*  Delft University of Technology. DOI: https://doi.org/10.5281/zenodo.18715223. Available at: [https://github.com/clarkborst/CDRTrainer](https://github.com/clarkborst/CDRTrainer)
 
 #### BibTeX
 ```bibtex
-@misc{Borst_HMISurveyFramework_2025,
+@misc{Borst_CDRTrainer_2026,
   author       = {Clark Borst},
-  title        = {Modular Open-Source Survey Framework for Human–Machine Interaction Research},
-  year         = {2025},
+  title        = {{CDRTrainer: Safe Reinforcement Learning with Human Feedback and Expert Demonstrations for 2D Aircraft Conflict Resolution}},
+  year         = {2026},
   publisher    = {{D}elft {U}niversity of {T}echnology},
-  doi          = {10.5281/zenodo.17495928},
-  howpublished = {\url{https://github.com/clarkborst/hmisurveys}},
-  url          = {\url{https://github.com/clarkborst/hmisurveys}},
+  doi          = {10.5281/zenodo.18715223},
+  howpublished = {\url{https://github.com/clarkborst/CDRTrainer}},
+  url          = {\url{https://github.com/clarkborst/CDRTrainer}},
   note         = {GPL-3 license.}
 }
 ```
