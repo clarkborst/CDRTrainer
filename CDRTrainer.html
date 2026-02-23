@@ -395,7 +395,7 @@
 
           const PZ_nm = this.sepMinNM;
 
-          // NEW: conflict angle range from UI globals caMinDeg/caMaxDeg
+          // conflict angle range from UI globals caMinDeg/caMaxDeg
           const minAngle = Math.max(0, Math.min(179, caMinDeg));
           const maxAngle = Math.max(minAngle + 1, Math.min(179, caMaxDeg));
           const absCA = minAngle + Math.random() * (maxAngle - minAngle);
@@ -669,7 +669,7 @@
         const reachedExit = state.distExit < this.exit.radiusNM;
         const exitGoodSide = this.own.xNM > this.worldWidthNM;
 
-        // NOTE: reachedExit is NOT a termination by itself in your current design
+        // NOTE: reachedExit is NOT a termination by itself in the current design
         const doneBase =
                 this.stepCount >= this.maxSteps ||
                 conflict ||
@@ -849,7 +849,7 @@
         // Make out-of-bounds termination (wrong-side exit) unambiguously worse than staying to finish.
         if (doneFinal && outOfBoundsTerminate) {
           // additionally punish leaving before completing route along-track
-          const REMAIN_SCALE = 120.0; // NM; tune to your typical remaining distance
+          const REMAIN_SCALE = 120.0; // NM; tune to the typical remaining distance
           const remain01 = Math.max(0, Math.min(1, alongRemain / REMAIN_SCALE));
           reward -= 10.0 * remain01; // up to -10 if very early exit
         }
@@ -2924,4 +2924,5 @@
 
   </script>
 </body>
+
 </html>
