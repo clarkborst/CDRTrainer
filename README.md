@@ -73,7 +73,7 @@ You are free to download and/or fork the project and:
 - **Share** adapted versions under the same license
 
 You must:
-- **Attribute** the original authors of the application
+- **Attribute** the original author of the application
 - **Cite** this repository (see citation below)
 - **Distribute adaptations** under the same license
 
