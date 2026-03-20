@@ -21,7 +21,7 @@ A reinforcement learning agent (linear Q-learning with function approximation) l
 
 The application and its source code is embedded in a single `HTML` file. Just run the file in your browser and you are ready to go!
 
-More detailed documentation can be found in the `PDF` file named `CDRTrainer.pdf`.
+More detailed documentation can be found in the `PDF` file named `CDRTrainer_documentation.pdf`.
 
 ![CDRTrainer_demo](https://github.com/user-attachments/assets/c88f51fc-cb3d-41e7-8dea-bff8a22e3030)
 
